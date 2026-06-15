@@ -139,3 +139,14 @@ lives_in(ali, kasur).
 occupation(ali, student).
 religion(ali, muslism).
 married(ali, ayesha).
+
+% === Dynamically added fact ===
+male(alia).
+parent(male, alia).
+parent(female, alia).
+dob(alia, d1990_08_09).
+occupation(alia, berozgar).
+religion(alia, muslim).
+married(alia, mudassar).
+different(alia, ali).
+different(ali, alia).

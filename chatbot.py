@@ -203,11 +203,13 @@ def handle_input(user_input: str) -> str:
         return "Data collection cancelled. The knowledge base was not modified."
 
     # ── "add person" typed while already collecting → restart ────────────────
+# ── "add person" typed while already collecting → ignore, re-show prompt ─
     if _collecting and (cleaned in _ADD_TRIGGERS or bool(_ADD_RE.search(cleaned))):
-        _stage = 1
-        _data = {}
-        return "Restarting data collection.\n\n" + _prompt(1)
-
+        return (
+            "You are already adding a member. "
+            "Please answer the current question below.\n\n"
+            + _prompt(_stage)
+        )
     # ── Start new collection ─────────────────────────────────────────────────
     if not _collecting and (cleaned in _ADD_TRIGGERS or bool(_ADD_RE.search(cleaned))):
         _collecting = True

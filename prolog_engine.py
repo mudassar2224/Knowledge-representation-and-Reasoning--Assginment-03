@@ -89,7 +89,6 @@ def _normalize_args(args):
 
 
 def query(relation, args):
-    """Run a Prolog query and return raw Pytholog results or [] on failure."""
     if not _safe_relation(relation):
         return []
     args = _normalize_args(args)
@@ -99,12 +98,14 @@ def query(relation, args):
     try:
         results = get_kb().query(pl.Expr(goal))
     except Exception as error:
-        print(f"[Prolog ERROR] {error}")
+        # Suppress the common empty-KB NoneType noise from pytholog.
+        # It is harmless — pytholog raises when no matching facts exist.
+        if "'NoneType' object is not iterable" not in str(error):
+            print(f"[Prolog ERROR] {error}")
         return []
     if not results or results == [False] or results == ["No"]:
         return []
     return results
-
 
 def query_yes_no(relation, args):
     """Run a ground boolean query."""

@@ -104,6 +104,12 @@ def kb_overview():
 # ── Suggested queries (adapts to current KB contents) ────────────────────────
 
 def build_suggested_queries():
+    # During collection, return empty list.
+    # This prevents the "add person" button from accidentally
+    # restarting collection mid-flow.
+    if st.session_state.get("_collecting", False):
+        return []
+
     members = _family_members()
     cities  = _family_cities()
 
@@ -369,7 +375,7 @@ def render_header(assistant_avatar, suggested_queries):
                 "<div class='hero-card' style='text-align:center;font-size:3rem;'>💬</div>",
                 unsafe_allow_html=True)
 
-    # Show a yellow banner when collection is in progress
+    # Show progress banner during collection
     if st.session_state.get("_collecting", False):
         stage = st.session_state.get("_stage", 0)
         data  = st.session_state.get("_data",  {})
@@ -377,19 +383,22 @@ def render_header(assistant_avatar, suggested_queries):
         st.markdown(
             f"<div class='collecting-banner'>"
             f"⏳ <strong>Adding {name}</strong> — Step {stage} of 9. "
-            f"Answer the question below, or type <code>cancel</code> to stop."
+            f"Answer the question in the chat box below, "
+            f"or type <code>cancel</code> to stop."
             f"</div>",
             unsafe_allow_html=True)
+        # NO suggested query buttons shown during collection
+        return
 
-    # Suggested query buttons
-    st.markdown("<div class='section-label'>Suggested questions</div>",
-                unsafe_allow_html=True)
-    cols = st.columns(2)
-    for i, sample in enumerate(suggested_queries):
-        with cols[i % 2]:
-            if st.button(sample, key=f"sample_{i}", use_container_width=True):
-                ask_bot(sample)
-
+    # Only show suggested queries when NOT collecting
+    if suggested_queries:
+        st.markdown("<div class='section-label'>Suggested questions</div>",
+                    unsafe_allow_html=True)
+        cols = st.columns(2)
+        for i, sample in enumerate(suggested_queries):
+            with cols[i % 2]:
+                if st.button(sample, key=f"sample_{i}", use_container_width=True):
+                    ask_bot(sample)
 
 # ── Conversation ──────────────────────────────────────────────────────────────
 
