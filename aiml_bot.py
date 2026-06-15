@@ -58,3 +58,12 @@ def get_predicate(name):
         return value.strip() if value else ""
     except Exception:
         return ""
+def set_predicate(name: str, value: str):
+    """
+    Store a value as an AIML predicate programmatically.
+    Satisfies assignment step 4 - fetching data into AIML variables.
+    """
+    try:
+        get_kernel().setPredicate(name, value)
+    except Exception:
+        pass

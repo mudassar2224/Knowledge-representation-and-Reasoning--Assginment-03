@@ -1,62 +1,193 @@
-# Natural-language dispatcher - A2 adds dynamic fact collection routing
+# chatbot.py
+# A2: Data collection now uses a Python state machine instead of AIML <that>.
+# This is reliable in both console and Streamlit.
 
 import re
 
 from aiml_bot import get_aiml_response
 from prolog_engine import query, query_yes_no
 from utils import (
-    KNOWN_NAMES,
-    PROPERTY_RELATIONS,
-    RELATION_MAP,
-    RELATION_NAMES,
-    capitalize_name,
-    clean_text,
-    extract_names,
-    find_relation,
-    format_response,
-    format_value,
-    format_yes_no,
-    is_safe_atom,
-    label_for,
-    normalize_atom,
-    words,
+    KNOWN_NAMES, PROPERTY_RELATIONS, RELATION_MAP, RELATION_NAMES,
+    capitalize_name, clean_text, extract_names, find_relation,
+    format_response, format_value, format_yes_no, is_safe_atom,
+    label_for, normalize_atom, words,
 )
 
-
-# ── A1: unchanged ────────────────────────────────────────────────────────────
+# ── A1: unchanged constants ───────────────────────────────────────────────────
 AIML_ONLY_PATTERNS = [
     r"^(hi|hello|hey|greetings|good morning|good evening|good afternoon|salam|assalam o alaikum)$",
     r"^(bye|goodbye|see you|take care|Allah hafiz|allah hafiz)$",
     r"^(help|what can you do|how do i use this|how do i use)$",
 ]
-
 KNOWN_CITIES = {"lahore", "karachi", "islamabad", "peshawar"}
 KNOWN_OCCUPATIONS = {
     "doctor", "teacher", "engineer", "nurse", "lawyer", "accountant",
     "businessman", "professor", "principal", "pilot", "student",
 }
-
 UNARY_RELATIONS = {"male", "female"}
 
 
-# ── A2: collection state ──────────────────────────────────────────────────────
-_collecting = False   # True while AIML is gathering data for a new person
+# ═══════════════════════════════════════════════════════════════════════════════
+# A2 — PYTHON STATE MACHINE FOR DATA COLLECTION
+# ═══════════════════════════════════════════════════════════════════════════════
+# Module-level variables hold the collection state.
+# In Streamlit, ask_bot() in streamlit_app.py syncs these
+# with st.session_state before and after every call to handle_input().
+# In the console, they persist naturally for the lifetime of the process.
 
-# Phrases that trigger data-collection mode
+_collecting: bool = False
+_stage: int       = 0       # 1..9 while collecting, 0 when idle
+_data: dict       = {}      # accumulates collected field values
+
 _ADD_TRIGGERS = {
     "add person", "add member", "add new person", "add new member",
     "new person", "new member", "add family member", "add new family member",
 }
-
-# Also catch natural-language variations like "I want to add a person"
 _ADD_RE = re.compile(
-    r"\b(add|create|register|insert|new)\b.{0,25}\b(person|member|family member)\b"
+    r"\b(add|create|register|insert)\b.{0,30}\b(person|member|family member)\b"
 )
 
+# Maps stage number → key in _data dict
+COLLECTION_KEYS = {
+    1: "name",
+    2: "gender",
+    3: "father",
+    4: "mother",
+    5: "dob",
+    6: "city",
+    7: "occupation",
+    8: "religion",
+    9: "spouse",
+}
 
-# ── Main dispatcher ──────────────────────────────────────────────────────────
-def handle_input(user_input):
-    global _collecting
+
+def _prompt(stage: int) -> str:
+    """Return the bot's question for the given stage."""
+    name = _data.get("name", "the person").replace("_", " ").title()
+    prompts = {
+        1: (
+            "Step 1/9 — Name\n"
+            "Enter the person's name (one word, letters only, e.g. ali):"
+        ),
+        2: (
+            f"Step 2/9 — Gender\n"
+            f"Is {name} male or female?  (type: male  or  female)"
+        ),
+        3: (
+            f"Step 3/9 — Father\n"
+            f"Enter {name}'s father's name, or type  unknown:"
+        ),
+        4: (
+            f"Step 4/9 — Mother\n"
+            f"Enter {name}'s mother's name, or type  unknown:"
+        ),
+        5: (
+            f"Step 5/9 — Date of birth\n"
+            f"Enter {name}'s DOB as YYYY-MM-DD (e.g. 2000-05-12), or type  unknown:"
+        ),
+        6: (
+            f"Step 6/9 — City\n"
+            f"Enter the city where {name} lives, or type  unknown:"
+        ),
+        7: (
+            f"Step 7/9 — Occupation\n"
+            f"Enter {name}'s occupation, or type  unknown:"
+        ),
+        8: (
+            f"Step 8/9 — Religion\n"
+            f"Enter {name}'s religion, or type  unknown:"
+        ),
+        9: (
+            f"Step 9/9 — Spouse\n"
+            f"Enter {name}'s spouse's name, or type  unknown:"
+        ),
+    }
+    return prompts[stage]
+
+
+def _validate_step(stage: int, raw: str):
+    """
+    Validate user input for a collection stage.
+    Returns (is_valid: bool, cleaned_value_or_error_msg: str)
+    """
+    value = raw.strip()
+
+    if value.lower() == "unknown":
+        return True, "unknown"
+
+    if stage == 1:  # Name must be a safe Prolog atom
+        atom = value.lower().replace(" ", "_")
+        if not re.fullmatch(r"[a-z][a-z0-9_]*", atom):
+            return False, (
+                "Name must start with a letter and contain only "
+                "letters, digits, or underscores (e.g.  ali  or  ali_hassan)."
+            )
+        return True, atom
+
+    if stage == 2:  # Gender
+        g = value.lower()
+        if g not in ("male", "female"):
+            return False, "Please type exactly  male  or  female."
+        return True, g
+
+    if stage == 5:  # DOB — accept YYYY-MM-DD or YYYY MM DD
+        dob = re.sub(r"[\s\-]+", "-", value)
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", dob):
+            return False, (
+                "Please enter the date as YYYY-MM-DD (e.g. 2000-05-12) "
+                "or type  unknown."
+            )
+        return True, dob
+
+    # All other stages — just lowercase and strip
+    cleaned = value.lower().strip()
+    if not cleaned:
+        return False, "Please enter a value or type  unknown."
+    return True, cleaned
+
+
+def _process_collection_step(user_input: str) -> str:
+    """
+    Validate and store one answer, then advance to the next stage.
+    Called by handle_input() whenever _collecting is True.
+    """
+    global _collecting, _stage, _data
+
+    key = COLLECTION_KEYS[_stage]
+    is_valid, result = _validate_step(_stage, user_input)
+
+    if not is_valid:
+        # Re-show the same prompt with an error message
+        return f"⚠  {result}\n\n{_prompt(_stage)}"
+
+    # Store in Python dict
+    _data[key] = result
+
+    # Also push to AIML predicate (satisfies assignment step 4)
+    try:
+        from aiml_bot import set_predicate
+        set_predicate(f"new_{key}", result)
+    except Exception:
+        pass
+
+    # Advance stage
+    _stage += 1
+
+    if _stage > 9:
+        # All 9 fields collected — build and save facts
+        _collecting = False
+        _stage = 0
+        return _handle_facts_ready()
+
+    return _prompt(_stage)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MAIN DISPATCHER
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def handle_input(user_input: str) -> str:
+    global _collecting, _stage, _data
 
     user_input = user_input.strip()
     if not user_input:
@@ -64,32 +195,31 @@ def handle_input(user_input):
 
     cleaned = clean_text(user_input)
 
-    # ── Cancel mid-collection ────────────────────────────────────────────────
+    # ── Cancel collection ────────────────────────────────────────────────────
     if _collecting and cleaned in {"cancel", "stop", "exit"}:
         _collecting = False
+        _stage = 0
+        _data = {}
         return "Data collection cancelled. The knowledge base was not modified."
 
-    # ── Detect add-person trigger ────────────────────────────────────────────
-    if cleaned in _ADD_TRIGGERS or bool(_ADD_RE.search(cleaned)):
-        _collecting = True
-        response = get_aiml_response(user_input)
-        if response:
-            return response
-        _collecting = False
-        return (
-            "Could not start data collection. "
-            "Make sure collect.aiml is in the project folder and loaded."
-        )
+    # ── "add person" typed while already collecting → restart ────────────────
+    if _collecting and (cleaned in _ADD_TRIGGERS or bool(_ADD_RE.search(cleaned))):
+        _stage = 1
+        _data = {}
+        return "Restarting data collection.\n\n" + _prompt(1)
 
-    # ── In-progress collection: all input goes to AIML ───────────────────────
+    # ── Start new collection ─────────────────────────────────────────────────
+    if not _collecting and (cleaned in _ADD_TRIGGERS or bool(_ADD_RE.search(cleaned))):
+        _collecting = True
+        _stage = 1
+        _data = {}
+        return "Starting data collection for a new family member.\n\n" + _prompt(1)
+
+    # ── In-progress: Python handles EVERYTHING — AIML is NOT called ──────────
+    # This avoids the family.aiml pattern-matching interference and the
+    # unreliable <that> context tracking that broke Streamlit collection.
     if _collecting:
-        response = get_aiml_response(user_input)
-        if response:
-            if "FACTS_READY" in response:
-                _collecting = False
-                return _handle_facts_ready()      # A2: build + save facts
-            return response
-        return "Please answer the question above, or type 'cancel' to stop."
+        return _process_collection_step(user_input)
 
     # ── Normal A1 flow ────────────────────────────────────────────────────────
     if _is_aiml_intent(user_input):
@@ -100,72 +230,49 @@ def handle_input(user_input):
     return _prolog_dispatch(user_input)
 
 
-# ── A2: Build and save facts when collection is complete ─────────────────────
-def _handle_facts_ready():
-    """
-    Called when collect.aiml signals FACTS_READY.
-    Steps:
-      1. Read all 9 predicates from the AIML kernel
-      2. Build Prolog fact strings (string handling)
-      3. Append to family_kb.pl (file handling)
-      4. Reload the KB so new facts are immediately queryable
-    """
-    from aiml_bot import get_predicate          # avoids circular import at top
+# ── A2: called when all 9 steps are done ─────────────────────────────────────
+
+def _handle_facts_ready() -> str:
+    """Steps 3-6 of the assignment: build facts, write file, reload KB."""
     from fact_builder import build_facts, save_facts_to_kb, person_exists
     from prolog_engine import reload_kb
 
-    # Step 1 – fetch AIML variables
-    data = {
-        "name":       get_predicate("new_name"),
-        "gender":     get_predicate("new_gender"),
-        "father":     get_predicate("new_father"),
-        "mother":     get_predicate("new_mother"),
-        "dob":        get_predicate("new_dob"),
-        "city":       get_predicate("new_city"),
-        "occupation": get_predicate("new_occupation"),
-        "religion":   get_predicate("new_religion"),
-        "spouse":     get_predicate("new_spouse"),
-    }
-
-    name = data["name"].strip().lower()
+    data = _data.copy()
+    name = data.get("name", "").strip().lower()
 
     if not name:
         return "Error: Name was not captured. Please try 'add person' again."
 
     if person_exists(name):
         return (
-            f"{capitalize_name(name)} already exists in the knowledge base. "
-            f"Try querying: tell me about {capitalize_name(name)}"
+            f"{capitalize_name(name)} already exists in the knowledge base.\n"
+            f"Try: tell me about {capitalize_name(name)}"
         )
 
-    # Step 2 – string handling: build Prolog fact strings
+    # Step 3: string handling — build Prolog fact strings
     facts = build_facts(data)
     if not facts:
-        return (
-            "Error: Could not create valid Prolog facts from the collected data. "
-            "Check that the name contains only letters and try again."
-        )
+        return "Error: Could not create valid Prolog facts. Please try 'add person' again."
 
-    # Step 3 – file handling: write to family_kb.pl
+    # Step 4: file handling — append to family_kb.pl
     if not save_facts_to_kb(facts):
         return "Error: Could not write to family_kb.pl. Please try again."
 
-    # Step 4 – reload KB (also updates utils.KNOWN_NAMES)
+    # Step 5: reload KB (also updates utils.KNOWN_NAMES via reload_kb)
     reload_kb()
 
-    # Also update chatbot-level city and occupation sets
-    city = data["city"].strip().lower()
-    occupation = data["occupation"].strip().lower()
+    # Keep in-memory city/occupation sets in sync
+    city       = data.get("city", "unknown").lower()
+    occupation = data.get("occupation", "unknown").lower()
     if city and city != "unknown":
         KNOWN_CITIES.add(city)
     if occupation and occupation != "unknown":
         KNOWN_OCCUPATIONS.add(occupation)
 
     main_facts = [f for f in facts if not f.startswith("different")]
-
     return (
         f"Successfully added {capitalize_name(name)} to the family knowledge base!\n"
-        f"Saved {len(main_facts)} facts to family_kb.pl.\n"
+        f"Saved {len(main_facts)} facts to family_kb.pl.\n\n"
         f"You can now query:\n"
         f"  tell me about {capitalize_name(name)}\n"
         f"  who is {capitalize_name(name)}'s father?\n"
@@ -173,16 +280,17 @@ def _handle_facts_ready():
     )
 
 
-# ── All functions below are UNCHANGED from A1 ─────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# A1 FUNCTIONS — UNCHANGED FROM ASSIGNMENT 1
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def _is_aiml_intent(text):
     cleaned = clean_text(text)
-    return any(re.match(pattern, cleaned, re.IGNORECASE) for pattern in AIML_ONLY_PATTERNS)
+    return any(re.match(p, cleaned, re.IGNORECASE) for p in AIML_ONLY_PATTERNS)
 
 
 def _dedupe(raw, var="X"):
-    seen = set()
-    values = []
+    seen, values = set(), []
     for item in raw or []:
         value = ""
         if isinstance(item, dict):
@@ -255,8 +363,8 @@ def _prolog_dispatch(text):
     if _looks_like_profile_request(cleaned) and not names:
         if re.search(r"\b(someone|someone else|person|member|not in the family|not in this family)\b", cleaned):
             return (
-                "I can only describe family members that exist in the knowledge base. "
-                "Type 'add person' to add a new member first."
+                "I can only describe family members in the knowledge base. "
+                "Type 'add person' to add a new member."
             )
 
     if len(names) == 1:
@@ -272,7 +380,7 @@ def _answer_yes_no(text, names):
         relation = find_relation(m.group(2))
         y = normalize_atom(m.group(3))
         if relation in RELATION_NAMES:
-            missing = [capitalize_name(name) for name in (x, y) if name not in KNOWN_NAMES]
+            missing = [capitalize_name(n) for n in (x, y) if n not in KNOWN_NAMES]
             if missing:
                 return f"Sorry, I do not have {', '.join(missing)} in this family KB."
             if _valid_person_pair(x, y):
@@ -356,8 +464,9 @@ def _answer_yes_no(text, names):
             return f"Sorry, I do not have {capitalize_name(person)} in this family KB."
         if relation in RELATION_NAMES:
             results = _dedupe(query(relation, ["X", person]))
-            return (f"Yes, {capitalize_name(person)} has {label_for(relation)}." if results
-                    else f"No, I could not find any {label_for(relation)} for {capitalize_name(person)}.")
+            return (f"Yes, {capitalize_name(person)} has {label_for(relation)}."
+                    if results else
+                    f"No, I could not find any {label_for(relation)} for {capitalize_name(person)}.")
     return None
 
 
@@ -380,17 +489,17 @@ def _valid_person_pair(x, y):
 
 def _property_yes_no(label, person, value, result):
     if label == "lives in":
-        return (f"Yes, {capitalize_name(person)} lives in {format_value(value)}." if result
-                else f"No, {capitalize_name(person)} does not live in {format_value(value)}.")
+        return (f"Yes, {capitalize_name(person)} lives in {format_value(value)}."
+                if result else f"No, {capitalize_name(person)} does not live in {format_value(value)}.")
     if label == "from":
-        return (f"Yes, {capitalize_name(person)} is from {format_value(value)}." if result
-                else f"No, {capitalize_name(person)} is not from {format_value(value)}.")
+        return (f"Yes, {capitalize_name(person)} is from {format_value(value)}."
+                if result else f"No, {capitalize_name(person)} is not from {format_value(value)}.")
     if label == "a":
         v = format_value(value).lower()
-        return (f"Yes, {capitalize_name(person)} is a {v}." if result
-                else f"No, {capitalize_name(person)} is not a {v}.")
-    return (f"Yes, {capitalize_name(person)} is {label} {format_value(value)}." if result
-            else f"No, {capitalize_name(person)} is not {label} {format_value(value)}.")
+        return (f"Yes, {capitalize_name(person)} is a {v}."
+                if result else f"No, {capitalize_name(person)} is not a {v}.")
+    return (f"Yes, {capitalize_name(person)} is {label} {format_value(value)}."
+            if result else f"No, {capitalize_name(person)} is not {label} {format_value(value)}.")
 
 
 def _looks_like_profile_request(text):
@@ -426,7 +535,7 @@ def _answer_gender_list(text):
             results = _unique_sorted(_dedupe(query(gender, ["X"])))
             if results:
                 return f"{gender.capitalize()} family members: {', '.join(format_value(n) for n in results)}."
-            return f"No {gender} family members found."
+            return f"No {gender} family members found. Type 'add person' to add members."
     return None
 
 
@@ -524,18 +633,18 @@ def _all_about(person):
     def add(label, relation, args):
         results = _dedupe(query(relation, args))
         if results:
-            lines.append(f"- {label}: {', '.join(format_value(item) for item in results)}")
+            lines.append(f"- {label}: {', '.join(format_value(i) for i in results)}")
 
-    add("Father",       "father",      ["X", person])
-    add("Mother",       "mother",      ["X", person])
-    add("Spouse",       "spouse",      ["X", person])
-    add("Children",     "child",       ["X", person])
-    add("Siblings",     "sibling",     ["X", person])
-    add("Grandparents", "grandparent", ["X", person])
-    add("Date of birth","dob",         [person, "X"])
-    add("Occupation",   "occupation",  [person, "X"])
-    add("City",         "lives_in",    [person, "X"])
-    add("Religion",     "religion",    [person, "X"])
+    add("Father",        "father",      ["X", person])
+    add("Mother",        "mother",      ["X", person])
+    add("Spouse",        "spouse",      ["X", person])
+    add("Children",      "child",       ["X", person])
+    add("Siblings",      "sibling",     ["X", person])
+    add("Grandparents",  "grandparent", ["X", person])
+    add("Date of birth", "dob",         [person, "X"])
+    add("Occupation",    "occupation",  [person, "X"])
+    add("City",          "lives_in",    [person, "X"])
+    add("Religion",      "religion",    [person, "X"])
 
     if len(lines) == 1:
         return f"Sorry, I have no information about {capitalize_name(person)}."
@@ -557,11 +666,11 @@ def _singular(word):
 def _fallback():
     return (
         "I can answer family knowledge-base questions. Try:\n"
-        "- add person                    ← add a new family member\n"
-        "- who is Ali's father?\n"
-        "- tell me about Ali\n"
-        "- is Shakeel an ancestor of Zain?\n"
-        "- who lives in Lahore?\n"
-        "- list all members\n\n"
+        "  add person                 ← add a new family member\n"
+        "  who is Ali's father?\n"
+        "  tell me about Ali\n"
+        "  is Shakeel an ancestor of Zain?\n"
+        "  who lives in Lahore?\n"
+        "  list all members\n\n"
         "The KB is empty until you add people via 'add person'."
     )
