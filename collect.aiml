@@ -1,0 +1,165 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<aiml version="1.0.1" encoding="UTF-8">
+
+<!-- =========================================================
+     TRIGGER PATTERNS - start data collection
+     ========================================================= -->
+<category>
+  <pattern>ADD PERSON</pattern>
+  <template>Starting data collection for a new family member. Enter the person name</template>
+</category>
+<category><pattern>ADD MEMBER</pattern>
+  <template><srai>ADD PERSON</srai></template></category>
+<category><pattern>ADD NEW PERSON</pattern>
+  <template><srai>ADD PERSON</srai></template></category>
+<category><pattern>ADD NEW MEMBER</pattern>
+  <template><srai>ADD PERSON</srai></template></category>
+<category><pattern>NEW PERSON</pattern>
+  <template><srai>ADD PERSON</srai></template></category>
+<category><pattern>NEW MEMBER</pattern>
+  <template><srai>ADD PERSON</srai></template></category>
+<category><pattern>ADD FAMILY MEMBER</pattern>
+  <template><srai>ADD PERSON</srai></template></category>
+<category><pattern>ADD NEW FAMILY MEMBER</pattern>
+  <template><srai>ADD PERSON</srai></template></category>
+
+<!-- =========================================================
+     CANCEL / STOP
+     ========================================================= -->
+<category>
+  <pattern>CANCEL</pattern>
+  <template>Data collection cancelled. Type add person to start again.</template>
+</category>
+<category><pattern>STOP</pattern>
+  <template><srai>CANCEL</srai></template></category>
+
+<!-- =========================================================
+     STEP 1 - Collect Name
+     <that> matches: "... Enter the person name"
+     ========================================================= -->
+<category>
+  <pattern>*</pattern>
+  <that>* ENTER THE PERSON NAME</that>
+  <template>
+    <set name="new_name"><lowercase><star/></lowercase></set>
+    Name saved as <get name="new_name"/>. Enter gender male or female
+  </template>
+</category>
+
+<!-- =========================================================
+     STEP 2 - Collect Gender
+     <that> matches: "... Enter gender male or female"
+     ========================================================= -->
+<category>
+  <pattern>MALE</pattern>
+  <that>* ENTER GENDER MALE OR FEMALE</that>
+  <template>
+    <set name="new_gender">male</set>
+    Gender set to male. Enter father name or unknown
+  </template>
+</category>
+
+<category>
+  <pattern>FEMALE</pattern>
+  <that>* ENTER GENDER MALE OR FEMALE</that>
+  <template>
+    <set name="new_gender">female</set>
+    Gender set to female. Enter father name or unknown
+  </template>
+</category>
+
+<!-- =========================================================
+     STEP 3 - Collect Father
+     <that> matches: "... Enter father name or unknown"
+     ========================================================= -->
+<category>
+  <pattern>*</pattern>
+  <that>* ENTER FATHER NAME OR UNKNOWN</that>
+  <template>
+    <set name="new_father"><lowercase><star/></lowercase></set>
+    Father set to <get name="new_father"/>. Enter mother name or unknown
+  </template>
+</category>
+
+<!-- =========================================================
+     STEP 4 - Collect Mother
+     <that> matches: "... Enter mother name or unknown"
+     ========================================================= -->
+<category>
+  <pattern>*</pattern>
+  <that>* ENTER MOTHER NAME OR UNKNOWN</that>
+  <template>
+    <set name="new_mother"><lowercase><star/></lowercase></set>
+    Mother set to <get name="new_mother"/>. Enter date of birth YYYY-MM-DD or unknown
+  </template>
+</category>
+
+<!-- =========================================================
+     STEP 5 - Collect DOB
+     <that> matches: "... Enter date of birth YYYY-MM-DD ..."
+     Note: hyphens in AIML <that> become spaces after normalization
+     so the trailing * absorbs "YYYY MM DD OR UNKNOWN"
+     ========================================================= -->
+<category>
+  <pattern>*</pattern>
+  <that>* ENTER DATE OF BIRTH *</that>
+  <template>
+    <set name="new_dob"><star/></set>
+    DOB saved. Enter city name or unknown
+  </template>
+</category>
+
+<!-- =========================================================
+     STEP 6 - Collect City
+     <that> matches: "... Enter city name or unknown"
+     ========================================================= -->
+<category>
+  <pattern>*</pattern>
+  <that>* ENTER CITY NAME OR UNKNOWN</that>
+  <template>
+    <set name="new_city"><lowercase><star/></lowercase></set>
+    City set to <get name="new_city"/>. Enter occupation or unknown
+  </template>
+</category>
+
+<!-- =========================================================
+     STEP 7 - Collect Occupation
+     <that> matches: "... Enter occupation or unknown"
+     ========================================================= -->
+<category>
+  <pattern>*</pattern>
+  <that>* ENTER OCCUPATION OR UNKNOWN</that>
+  <template>
+    <set name="new_occupation"><lowercase><star/></lowercase></set>
+    Occupation set to <get name="new_occupation"/>. Enter religion or unknown
+  </template>
+</category>
+
+<!-- =========================================================
+     STEP 8 - Collect Religion
+     <that> matches: "... Enter religion or unknown"
+     ========================================================= -->
+<category>
+  <pattern>*</pattern>
+  <that>* ENTER RELIGION OR UNKNOWN</that>
+  <template>
+    <set name="new_religion"><lowercase><star/></lowercase></set>
+    Religion set to <get name="new_religion"/>. Enter spouse name or unknown
+  </template>
+</category>
+
+<!-- =========================================================
+     STEP 9 - Collect Spouse (FINAL STEP)
+     <that> matches: "... Enter spouse name or unknown"
+     Sentinel FACTS_READY triggers Python to save facts.
+     ========================================================= -->
+<category>
+  <pattern>*</pattern>
+  <that>* ENTER SPOUSE NAME OR UNKNOWN</that>
+  <template>
+    <set name="new_spouse"><lowercase><star/></lowercase></set>
+    All data collected for <get name="new_name"/>. FACTS_READY
+  </template>
+</category>
+
+</aiml>

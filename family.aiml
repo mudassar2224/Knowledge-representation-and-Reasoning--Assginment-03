@@ -1,0 +1,362 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<aiml version="1.0.1" encoding="UTF-8">
+
+<!-- =========================================================
+     GREETINGS
+     ========================================================= -->
+<category>
+  <pattern>HELLO</pattern>
+  <template><random>
+    <li>Hello! Ask me anything about the family knowledge base.</li>
+    <li>Hi there! Try: "who is Ali's father?" or "tell me about Zain".</li>
+  </random></template>
+</category>
+<category><pattern>HI</pattern><template><srai>HELLO</srai></template></category>
+<category><pattern>HEY</pattern><template><srai>HELLO</srai></template></category>
+<category><pattern>SALAM</pattern><template>Wa alaikum salam! Ask me a family question.</template></category>
+<category><pattern>ASSALAM O ALAIKUM</pattern><template><srai>SALAM</srai></template></category>
+<category><pattern>GOOD MORNING</pattern><template>Good morning! How can I help with the family knowledge base?</template></category>
+<category><pattern>GOOD AFTERNOON</pattern><template>Good afternoon! Send me a family query.</template></category>
+<category><pattern>GOOD EVENING</pattern><template>Good evening! I can answer family facts and relationships.</template></category>
+
+<!-- =========================================================
+     HELP
+     ========================================================= -->
+<category>
+  <pattern>HELP</pattern>
+  <template>Here are some things you can ask:
+RELATIONSHIPS: who is Ali s father? / show siblings of Zain / list children of Ali
+URDU RELATIONS: who is Zain s chacha? / who is Laiba s maamu? / who is Zain s dada?
+IN-LAWS: who is Ali s father in law?
+PROPERTIES: what is Ali s dob? / what is Ali s occupation? / where does Ali live?
+YES/NO: is Shakeel an ancestor of Zain? / are Ali and Asad related?
+LISTS: who lives in Lahore? / list all members / who is a doctor?
+PROFILE: tell me about Ali</template>
+</category>
+<category><pattern>WHAT CAN YOU DO</pattern><template><srai>HELP</srai></template></category>
+<category><pattern>HOW DO I USE THIS</pattern><template><srai>HELP</srai></template></category>
+
+<!-- =========================================================
+     FAREWELLS
+     ========================================================= -->
+<category>
+  <pattern>BYE</pattern>
+  <template><random>
+    <li>Goodbye! It was great helping you explore the family tree.</li>
+    <li>Bye! Come back when you want more family questions answered.</li>
+  </random></template>
+</category>
+<category><pattern>GOODBYE</pattern><template><srai>BYE</srai></template></category>
+<category><pattern>ALLAH HAFIZ</pattern><template><srai>BYE</srai></template></category>
+<category><pattern>SEE YOU</pattern><template><srai>BYE</srai></template></category>
+<category><pattern>TAKE CARE</pattern><template><srai>BYE</srai></template></category>
+
+<!-- =========================================================
+     FATHER PATTERNS  — fetch from KB
+     ========================================================= -->
+<category>
+  <pattern>WHO IS * FATHER</pattern>
+  <template>Let me check the knowledge base for <star/> s father.</template>
+</category>
+<category>
+  <pattern>WHO IS THE FATHER OF *</pattern>
+  <template><srai>WHO IS <star/> FATHER</srai></template>
+</category>
+<category>
+  <pattern>FATHER OF *</pattern>
+  <template><srai>WHO IS <star/> FATHER</srai></template>
+</category>
+<category>
+  <pattern>* S FATHER</pattern>
+  <template><srai>WHO IS <star/> FATHER</srai></template>
+</category>
+
+<!-- =========================================================
+     MOTHER PATTERNS
+     ========================================================= -->
+<category>
+  <pattern>WHO IS * MOTHER</pattern>
+  <template>Let me check the knowledge base for <star/> s mother.</template>
+</category>
+<category>
+  <pattern>WHO IS THE MOTHER OF *</pattern>
+  <template><srai>WHO IS <star/> MOTHER</srai></template>
+</category>
+<category>
+  <pattern>MOTHER OF *</pattern>
+  <template><srai>WHO IS <star/> MOTHER</srai></template>
+</category>
+
+<!-- =========================================================
+     SIBLING PATTERNS
+     ========================================================= -->
+<category>
+  <pattern>SHOW SIBLINGS OF *</pattern>
+  <template>Fetching siblings of <star/> from the knowledge base.</template>
+</category>
+<category>
+  <pattern>WHO ARE THE SIBLINGS OF *</pattern>
+  <template><srai>SHOW SIBLINGS OF <star/></srai></template>
+</category>
+<category>
+  <pattern>SIBLINGS OF *</pattern>
+  <template><srai>SHOW SIBLINGS OF <star/></srai></template>
+</category>
+<category>
+  <pattern>* S SIBLINGS</pattern>
+  <template><srai>SHOW SIBLINGS OF <star/></srai></template>
+</category>
+
+<!-- =========================================================
+     CHILDREN PATTERNS
+     ========================================================= -->
+<category>
+  <pattern>LIST CHILDREN OF *</pattern>
+  <template>Looking up children of <star/> in the Prolog knowledge base.</template>
+</category>
+<category>
+  <pattern>WHO ARE THE CHILDREN OF *</pattern>
+  <template><srai>LIST CHILDREN OF <star/></srai></template>
+</category>
+<category>
+  <pattern>CHILDREN OF *</pattern>
+  <template><srai>LIST CHILDREN OF <star/></srai></template>
+</category>
+<category>
+  <pattern>KIDS OF *</pattern>
+  <template><srai>LIST CHILDREN OF <star/></srai></template>
+</category>
+
+<!-- =========================================================
+     GRANDPARENT PATTERNS
+     ========================================================= -->
+<category>
+  <pattern>WHO ARE THE GRANDPARENTS OF *</pattern>
+  <template>Checking grandparents of <star/> in the family knowledge base.</template>
+</category>
+<category>
+  <pattern>WHO IS * GRANDFATHER</pattern>
+  <template>Looking up grandfather of <star/>.</template>
+</category>
+<category>
+  <pattern>WHO IS * GRANDMOTHER</pattern>
+  <template>Looking up grandmother of <star/>.</template>
+</category>
+<category>
+  <pattern>WHO IS * DADA</pattern>
+  <template>Fetching dada (paternal grandfather) of <star/>.</template>
+</category>
+<category>
+  <pattern>WHO IS * DADI</pattern>
+  <template>Fetching dadi (paternal grandmother) of <star/>.</template>
+</category>
+<category>
+  <pattern>WHO IS * NANA</pattern>
+  <template>Fetching nana (maternal grandfather) of <star/>.</template>
+</category>
+<category>
+  <pattern>WHO IS * NANI</pattern>
+  <template>Fetching nani (maternal grandmother) of <star/>.</template>
+</category>
+
+<!-- =========================================================
+     DOB PATTERNS
+     ========================================================= -->
+<category>
+  <pattern>WHAT IS * DOB</pattern>
+  <template>Checking date of birth for <star/> in the knowledge base.</template>
+</category>
+<category>
+  <pattern>WHAT IS * DATE OF BIRTH</pattern>
+  <template><srai>WHAT IS <star/> DOB</srai></template>
+</category>
+<category>
+  <pattern>WHEN WAS * BORN</pattern>
+  <template><srai>WHAT IS <star/> DOB</srai></template>
+</category>
+<category>
+  <pattern>* S DOB</pattern>
+  <template><srai>WHAT IS <star/> DOB</srai></template>
+</category>
+
+<!-- =========================================================
+     OCCUPATION PATTERNS
+     ========================================================= -->
+<category>
+  <pattern>WHAT IS * OCCUPATION</pattern>
+  <template>Looking up occupation of <star/> from the knowledge base.</template>
+</category>
+<category>
+  <pattern>WHAT IS * JOB</pattern>
+  <template><srai>WHAT IS <star/> OCCUPATION</srai></template>
+</category>
+<category>
+  <pattern>WHAT DOES * DO</pattern>
+  <template><srai>WHAT IS <star/> OCCUPATION</srai></template>
+</category>
+
+<!-- =========================================================
+     CITY / LOCATION PATTERNS
+     ========================================================= -->
+<category>
+  <pattern>WHERE DOES * LIVE</pattern>
+  <template>Checking city for <star/> in the knowledge base.</template>
+</category>
+<category>
+  <pattern>WHERE IS * FROM</pattern>
+  <template><srai>WHERE DOES <star/> LIVE</srai></template>
+</category>
+<category>
+  <pattern>WHAT CITY DOES * LIVE IN</pattern>
+  <template><srai>WHERE DOES <star/> LIVE</srai></template>
+</category>
+
+<!-- =========================================================
+     EASTERN RELATION PATTERNS
+     ========================================================= -->
+<category>
+  <pattern>WHO IS * CHACHA</pattern>
+  <template>Fetching chacha (father s brother) of <star/> from the knowledge base.</template>
+</category>
+<category>
+  <pattern>CHACHA OF *</pattern>
+  <template><srai>WHO IS <star/> CHACHA</srai></template>
+</category>
+<category>
+  <pattern>WHO IS * PHOOPHI</pattern>
+  <template>Looking up phoophi (father s sister) of <star/>.</template>
+</category>
+<category>
+  <pattern>WHO IS * MAAMU</pattern>
+  <template>Looking up maamu (mother s brother) of <star/>.</template>
+</category>
+<category>
+  <pattern>WHO IS * KHALA</pattern>
+  <template>Looking up khala (mother s sister) of <star/>.</template>
+</category>
+
+<!-- =========================================================
+     IN-LAW PATTERNS
+     ========================================================= -->
+<category>
+  <pattern>WHO IS * FATHER IN LAW</pattern>
+  <template>Checking father-in-law of <star/> in the knowledge base.</template>
+</category>
+<category>
+  <pattern>WHO IS * MOTHER IN LAW</pattern>
+  <template>Checking mother-in-law of <star/> in the knowledge base.</template>
+</category>
+<category>
+  <pattern>WHO IS * BROTHER IN LAW</pattern>
+  <template>Checking brother-in-law of <star/> in the knowledge base.</template>
+</category>
+<category>
+  <pattern>WHO IS * SISTER IN LAW</pattern>
+  <template>Checking sister-in-law of <star/> in the knowledge base.</template>
+</category>
+
+<!-- =========================================================
+     ANCESTOR / DESCENDANT PATTERNS
+     ========================================================= -->
+<category>
+  <pattern>WHO ARE THE ANCESTORS OF *</pattern>
+  <template>Running ancestor query for <star/> in the Prolog knowledge base.</template>
+</category>
+<category>
+  <pattern>ANCESTORS OF *</pattern>
+  <template><srai>WHO ARE THE ANCESTORS OF <star/></srai></template>
+</category>
+<category>
+  <pattern>WHO ARE THE DESCENDANTS OF *</pattern>
+  <template>Running descendant query for <star/> in the Prolog knowledge base.</template>
+</category>
+
+<!-- =========================================================
+     YES/NO RELATION PATTERNS
+     ========================================================= -->
+<category>
+  <pattern>IS * AN ANCESTOR OF *</pattern>
+  <template>Let me check if <star/> is an ancestor of <star index="2"/> using Prolog logic.</template>
+</category>
+<category>
+  <pattern>IS * RELATED TO *</pattern>
+  <template>Checking if <star/> and <star index="2"/> are blood relatives in the KB.</template>
+</category>
+<category>
+  <pattern>ARE * AND * RELATED</pattern>
+  <template><srai>IS <star/> RELATED TO <star index="2"/></srai></template>
+</category>
+
+<!-- =========================================================
+     PROFILE PATTERNS
+     ========================================================= -->
+<category>
+  <pattern>TELL ME ABOUT *</pattern>
+  <template>Fetching full profile of <star/> from the family knowledge base.</template>
+</category>
+<category>
+  <pattern>ALL ABOUT *</pattern>
+  <template><srai>TELL ME ABOUT <star/></srai></template>
+</category>
+<category>
+  <pattern>PROFILE OF *</pattern>
+  <template><srai>TELL ME ABOUT <star/></srai></template>
+</category>
+
+<!-- =========================================================
+     UNCLE / AUNT / COUSIN
+     ========================================================= -->
+<category>
+  <pattern>WHO IS * UNCLE</pattern>
+  <template>Looking up uncle of <star/> from the knowledge base.</template>
+</category>
+<category>
+  <pattern>WHO IS * AUNT</pattern>
+  <template>Looking up aunt of <star/> from the knowledge base.</template>
+</category>
+<category>
+  <pattern>WHO ARE THE COUSINS OF *</pattern>
+  <template>Fetching cousins of <star/> from the knowledge base.</template>
+</category>
+<category>
+  <pattern>COUSINS OF *</pattern>
+  <template><srai>WHO ARE THE COUSINS OF <star/></srai></template>
+</category>
+
+<!-- =========================================================
+     SPOUSE / MARRIED
+     ========================================================= -->
+<category>
+  <pattern>WHO IS * WIFE</pattern>
+  <template>Checking wife of <star/> in the knowledge base.</template>
+</category>
+<category>
+  <pattern>WHO IS * HUSBAND</pattern>
+  <template>Checking husband of <star/> in the knowledge base.</template>
+</category>
+<category>
+  <pattern>WHO IS * MARRIED TO</pattern>
+  <template>Checking spouse of <star/> in the knowledge base.</template>
+</category>
+
+<!-- =========================================================
+     LIST QUERIES
+     ========================================================= -->
+<category>
+  <pattern>WHO LIVES IN *</pattern>
+  <template>Fetching family members who live in <star/> from the knowledge base.</template>
+</category>
+<category>
+  <pattern>LIST ALL MEMBERS</pattern>
+  <template>Fetching all family members from the knowledge base.</template>
+</category>
+<category>
+  <pattern>WHO ARE THE MALE MEMBERS</pattern>
+  <template>Fetching all male members from the knowledge base.</template>
+</category>
+<category>
+  <pattern>WHO ARE THE FEMALE MEMBERS</pattern>
+  <template>Fetching all female members from the knowledge base.</template>
+</category>
+
+</aiml>
