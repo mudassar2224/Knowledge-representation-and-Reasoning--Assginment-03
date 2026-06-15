@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Family Knowledge Base Chatbot
 
 A family-reasoning chatbot with **two interfaces powered by the same brain**:
@@ -194,3 +195,6 @@ Family_Chatboat/
 
 - The Streamlit UI now stays compact and KB-driven.
 - You can keep improving the UI inside `streamlit_app.py` without changing the reasoning core.
+=======
+# Knowledge-representation-and-Reasoning--Assginment-02
+>>>>>>> bc0f70ba0cf363b1b794ad771a1d41f81ee4f147
