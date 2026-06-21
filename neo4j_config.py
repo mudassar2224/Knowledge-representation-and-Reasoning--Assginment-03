@@ -1,6 +1,15 @@
 # neo4j_config.py
-# Change NEO4J_PASSWORD to whatever you set in Neo4j Desktop
+# Automatically uses Streamlit secrets on cloud, file values locally.
 
-NEO4J_URI      = "bolt://localhost:7687"
-NEO4J_USERNAME = "neo4j"
-NEO4J_PASSWORD = "password"   # ← change this to your Neo4j Desktop password
+try:
+    import streamlit as st
+    NEO4J_URI      = st.secrets["neo4j"]["uri"]
+    NEO4J_USERNAME = st.secrets["neo4j"]["username"]
+    NEO4J_PASSWORD = st.secrets["neo4j"]["password"]
+    NEO4J_DATABASE = st.secrets["neo4j"]["database"]
+except Exception:
+    # Local fallback — used when running main.py from console
+    NEO4J_URI      = "neo4j+s://d23b33f1.databases.neo4j.io"
+    NEO4J_USERNAME = "d23b33f1"
+    NEO4J_PASSWORD = "3_k7cisfzjZ--Pw6qd5cBGyCpRSUZWWYUQPag51419o"
+    NEO4J_DATABASE = "d23b33f1"
