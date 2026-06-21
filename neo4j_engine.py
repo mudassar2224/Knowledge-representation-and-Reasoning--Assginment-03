@@ -1,14 +1,9 @@
 # neo4j_engine.py
-# Assignment 3: Replaces prolog_engine.py
-# All Prolog rules are now written as Cypher graph queries.
-#
-# SCHEMA:
-#   Node  : (:Person {name, gender, dob, occupation, city, religion})
-#   Edges : [:PARENT_OF]   (parent)-[:PARENT_OF]->(child)
-#           [:MARRIED_TO]  (person)-[:MARRIED_TO]->(spouse)
+# Assignment 3: All Prolog rules as Cypher graph queries.
+# FIX: Config imported lazily (inside functions) so Streamlit secrets
+#      are always available before the driver is created.
 
 from neo4j import GraphDatabase
-from neo4j_config import NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD
 
 _driver = None
 
@@ -16,14 +11,32 @@ _driver = None
 # ── Connection helpers ────────────────────────────────────────────────────────
 
 def _get_driver():
+    """
+    Create driver lazily so neo4j_config always reads from
+    Streamlit secrets (not from import-time module load).
+    """
     global _driver
     if _driver is None:
         from neo4j_config import NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD
         _driver = GraphDatabase.driver(
             NEO4J_URI,
             auth=(NEO4J_USERNAME, NEO4J_PASSWORD),
+            max_connection_lifetime=200,
+            max_connection_pool_size=10,
+            connection_acquisition_timeout=30,
         )
     return _driver
+
+
+def _reset_driver():
+    """Force a fresh driver connection on next call."""
+    global _driver
+    try:
+        if _driver:
+            _driver.close()
+    except Exception:
+        pass
+    _driver = None
 
 
 def _run(cypher: str, params: dict = None) -> list:
@@ -39,7 +52,6 @@ def _run(cypher: str, params: dict = None) -> list:
 
 
 def _is_var(s: str) -> bool:
-    """True if s is a Prolog-style variable (starts with uppercase)."""
     s = str(s).strip()
     return bool(s) and s[0].isupper()
 
@@ -47,7 +59,12 @@ def _is_var(s: str) -> bool:
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def load_graph():
-    """Test the Neo4j Aura connection and report graph size."""
+    """
+    Connect to Neo4j Aura and report graph size.
+    Resets the driver first so stale connections from import-time
+    are discarded and a fresh connection using correct secrets is made.
+    """
+    _reset_driver()   # ← KEY FIX: discard any stale driver
     try:
         rows = _run("MATCH (p:Person) RETURN count(p) AS n")
         n = rows[0]["n"] if rows else 0
@@ -55,8 +72,6 @@ def load_graph():
         return True
     except Exception as e:
         print(f"[Neo4j] Connection FAILED: {e}")
-        print("  Check that your Aura instance is Running at console.neo4j.io")
-        print("  Check that Streamlit secrets are set correctly.")
         return False
 
 
@@ -69,7 +84,6 @@ def reload_graph():
 
 
 def get_all_people() -> set:
-    """Return all person names currently in the graph."""
     rows = _run("MATCH (p:Person) RETURN p.name AS name")
     return {r["name"] for r in rows if r.get("name")}
 
@@ -82,12 +96,7 @@ def person_exists_in_graph(name: str) -> bool:
     return len(rows) > 0
 
 
-# ── Individual Cypher query functions ────────────────────────────────────────
-# Each function mirrors one Prolog rule.
-# Convention: _is_var(x) means x is the variable to find.
-# All results return {"X": value} to match the prolog_engine interface.
-
-# ── Gender ───────────────────────────────────────────────────────────────────
+# ── Gender ────────────────────────────────────────────────────────────────────
 
 def _q_male(args):
     x = args[0]
@@ -95,8 +104,7 @@ def _q_male(args):
         return _run("MATCH (p:Person {gender:'male'}) RETURN p.name AS X")
     return _run(
         "MATCH (p:Person {name:$n}) WHERE p.gender='male' RETURN p.name AS X",
-        {"n": x}
-    )
+        {"n": x})
 
 
 def _q_female(args):
@@ -105,8 +113,7 @@ def _q_female(args):
         return _run("MATCH (p:Person {gender:'female'}) RETURN p.name AS X")
     return _run(
         "MATCH (p:Person {name:$n}) WHERE p.gender='female' RETURN p.name AS X",
-        {"n": x}
-    )
+        {"n": x})
 
 
 # ── Parent / Child ────────────────────────────────────────────────────────────
@@ -116,21 +123,17 @@ def _q_parent(args):
     if _is_var(x) and not _is_var(y):
         return _run(
             "MATCH (x:Person)-[:PARENT_OF]->(y:Person {name:$n}) RETURN x.name AS X",
-            {"n": y}
-        )
+            {"n": y})
     if not _is_var(x) and _is_var(y):
         return _run(
             "MATCH (x:Person {name:$n})-[:PARENT_OF]->(y:Person) RETURN y.name AS X",
-            {"n": x}
-        )
+            {"n": x})
     return _run(
         "MATCH (x:Person {name:$xn})-[:PARENT_OF]->(y:Person {name:$yn}) RETURN x.name AS X",
-        {"xn": x, "yn": y}
-    )
+        {"xn": x, "yn": y})
 
 
 def _q_father(args):
-    """father(X, Y) :- male(X), parent(X, Y)."""
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
@@ -146,7 +149,6 @@ def _q_father(args):
 
 
 def _q_mother(args):
-    """mother(X, Y) :- female(X), parent(X, Y)."""
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
@@ -162,7 +164,6 @@ def _q_mother(args):
 
 
 def _q_child(args):
-    """child(X, Y) :- parent(Y, X)."""
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
@@ -202,7 +203,6 @@ def _q_daughter(args):
 # ── Spouse ────────────────────────────────────────────────────────────────────
 
 def _q_spouse(args):
-    """spouse(X, Y) :- married(X, Y) or married(Y, X). Uses undirected match."""
     x, y = args[0], args[1]
     if not _is_var(x) and _is_var(y):
         return _run("""
@@ -242,7 +242,6 @@ def _q_wife(args):
 # ── Siblings ──────────────────────────────────────────────────────────────────
 
 def _q_sibling(args):
-    """sibling(X, Y) :- parent(Z, X), parent(Z, Y), X ≠ Y."""
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
@@ -356,7 +355,6 @@ def _q_granddaughter(args):
 # ── Dada / Dadi / Nana / Nani ─────────────────────────────────────────────────
 
 def _q_dada(args):
-    """Paternal grandfather: father's father."""
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
@@ -370,7 +368,6 @@ def _q_dada(args):
 
 
 def _q_dadi(args):
-    """Paternal grandmother: father's mother."""
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
@@ -384,7 +381,6 @@ def _q_dadi(args):
 
 
 def _q_nana(args):
-    """Maternal grandfather: mother's father."""
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
@@ -398,7 +394,6 @@ def _q_nana(args):
 
 
 def _q_nani(args):
-    """Maternal grandmother: mother's mother."""
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
@@ -414,7 +409,6 @@ def _q_nani(args):
 # ── Extended Family ───────────────────────────────────────────────────────────
 
 def _q_uncle(args):
-    """Uncle: male sibling of a parent of Y."""
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
@@ -430,7 +424,6 @@ def _q_uncle(args):
 
 
 def _q_aunt(args):
-    """Aunt: female sibling of a parent of Y."""
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
@@ -446,7 +439,6 @@ def _q_aunt(args):
 
 
 def _q_cousin(args):
-    """Cousin: child of sibling of parent of Y."""
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
@@ -462,7 +454,6 @@ def _q_cousin(args):
 
 
 def _q_nephew(args):
-    """Nephew: male child of a sibling of Y."""
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
@@ -478,7 +469,6 @@ def _q_nephew(args):
 
 
 def _q_niece(args):
-    """Niece: female child of a sibling of Y."""
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
@@ -496,7 +486,6 @@ def _q_niece(args):
 # ── Urdu Relations ────────────────────────────────────────────────────────────
 
 def _q_chacha(args):
-    """Chacha: father's brother."""
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
@@ -512,7 +501,6 @@ def _q_chacha(args):
 
 
 def _q_phoophi(args):
-    """Phoophi: father's sister."""
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
@@ -528,7 +516,6 @@ def _q_phoophi(args):
 
 
 def _q_maamu(args):
-    """Maamu: mother's brother."""
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
@@ -544,7 +531,6 @@ def _q_maamu(args):
 
 
 def _q_khala(args):
-    """Khala: mother's sister."""
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
@@ -560,7 +546,6 @@ def _q_khala(args):
 
 
 def _q_chachi(args):
-    """Chachi: wife of chacha."""
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
@@ -573,7 +558,6 @@ def _q_chachi(args):
 
 
 def _q_phuppa(args):
-    """Phuppa: husband of phoophi."""
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
@@ -586,7 +570,6 @@ def _q_phuppa(args):
 
 
 def _q_maami(args):
-    """Maami: wife of maamu."""
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
@@ -599,7 +582,6 @@ def _q_maami(args):
 
 
 def _q_khalu(args):
-    """Khalu: husband of khala."""
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
@@ -677,12 +659,9 @@ def _q_daughter_in_law(args):
     return []
 
 
-# ── Ancestor / Descendant (recursive) ────────────────────────────────────────
-# Cypher's [:PARENT_OF*1..] traverses any number of hops automatically.
-# This replaces the recursive Prolog ancestor rule.
+# ── Ancestor / Descendant ─────────────────────────────────────────────────────
 
 def _q_ancestor(args):
-    """ancestor(X, Y) :- parent(X,Y). ancestor(X,Y) :- parent(X,Z), ancestor(Z,Y)."""
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
@@ -709,10 +688,6 @@ def _q_descendant(args):
 
 
 def _q_blood_relative(args):
-    """
-    Any two people connected through PARENT_OF edges (directed or undirected).
-    The undirected - in Cypher covers ancestors, descendants, and cousins.
-    """
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
@@ -743,71 +718,57 @@ def _q_family_member(args):
 # ── Properties ────────────────────────────────────────────────────────────────
 
 def _q_dob(args):
-    """dob(Person, DateValue)"""
     x, y = args[0], args[1]
     if not _is_var(x) and _is_var(y):
         return _run(
             "MATCH (p:Person {name:$n}) WHERE p.dob IS NOT NULL RETURN p.dob AS X",
-            {"n": x}
-        )
+            {"n": x})
     if _is_var(x) and not _is_var(y):
         return _run("MATCH (p:Person {dob:$d}) RETURN p.name AS X", {"d": y})
     return []
 
 
 def _q_occupation(args):
-    """occupation(Person, Job)"""
     x, y = args[0], args[1]
     if not _is_var(x) and _is_var(y):
         return _run(
             "MATCH (p:Person {name:$n}) WHERE p.occupation IS NOT NULL RETURN p.occupation AS X",
-            {"n": x}
-        )
+            {"n": x})
     if _is_var(x) and not _is_var(y):
         return _run("MATCH (p:Person {occupation:$occ}) RETURN p.name AS X", {"occ": y})
     if _is_var(x) and _is_var(y):
-        # Used by streamlit_app._family_occupations() with var="Y"
         return _run(
-            "MATCH (p:Person) WHERE p.occupation IS NOT NULL RETURN p.name AS X, p.occupation AS Y"
-        )
+            "MATCH (p:Person) WHERE p.occupation IS NOT NULL RETURN p.name AS X, p.occupation AS Y")
     return []
 
 
 def _q_lives_in(args):
-    """lives_in(Person, City)"""
     x, y = args[0], args[1]
     if not _is_var(x) and _is_var(y):
         return _run(
             "MATCH (p:Person {name:$n}) WHERE p.city IS NOT NULL RETURN p.city AS X",
-            {"n": x}
-        )
+            {"n": x})
     if _is_var(x) and not _is_var(y):
         return _run("MATCH (p:Person {city:$city}) RETURN p.name AS X", {"city": y})
     if _is_var(x) and _is_var(y):
-        # Used by streamlit_app._family_cities() with var="Y"
         return _run(
-            "MATCH (p:Person) WHERE p.city IS NOT NULL RETURN p.name AS X, p.city AS Y"
-        )
+            "MATCH (p:Person) WHERE p.city IS NOT NULL RETURN p.name AS X, p.city AS Y")
     return _run(
         "MATCH (p:Person {name:$xn, city:$yn}) RETURN p.name AS X",
-        {"xn": x, "yn": y}
-    )
+        {"xn": x, "yn": y})
 
 
 def _q_religion(args):
-    """religion(Person, Religion)"""
     x, y = args[0], args[1]
     if not _is_var(x) and _is_var(y):
         return _run(
             "MATCH (p:Person {name:$n}) WHERE p.religion IS NOT NULL RETURN p.religion AS X",
-            {"n": x}
-        )
+            {"n": x})
     if _is_var(x) and not _is_var(y):
         return _run("MATCH (p:Person {religion:$r}) RETURN p.name AS X", {"r": y})
     if _is_var(x) and _is_var(y):
         return _run(
-            "MATCH (p:Person) WHERE p.religion IS NOT NULL RETURN p.name AS X, p.religion AS Y"
-        )
+            "MATCH (p:Person) WHERE p.religion IS NOT NULL RETURN p.name AS X, p.religion AS Y")
     return []
 
 
@@ -816,7 +777,6 @@ def _q_religion(args):
 def _q_same_city(args):
     x, y = args[0], args[1]
     name = x if not _is_var(x) else y if not _is_var(y) else None
-    other_var = _is_var(y) if not _is_var(x) else _is_var(x)
     if name:
         return _run("""
             MATCH (a:Person {name:$n}), (b:Person)
@@ -867,7 +827,7 @@ _QUERY_MAP = {
     "husband":         _q_husband,
     "wife":            _q_wife,
     "spouse":          _q_spouse,
-    "married":         _q_spouse,       # alias
+    "married":         _q_spouse,
     "sibling":         _q_sibling,
     "brother":         _q_brother,
     "sister":          _q_sister,
@@ -915,11 +875,6 @@ _QUERY_MAP = {
 
 
 def query(relation: str, args: list) -> list:
-    """
-    Execute a family relationship query against Neo4j.
-    Mirrors the prolog_engine.query() interface exactly.
-    Returns [{"X": value}, ...] or [{"X": v1, "Y": v2}, ...] for both-variable queries.
-    """
     fn = _QUERY_MAP.get(relation)
     if fn is None:
         return []
@@ -931,5 +886,4 @@ def query(relation: str, args: list) -> list:
 
 
 def query_yes_no(relation: str, args: list) -> bool:
-    """Check if a ground relation holds. Returns True/False."""
     return bool(query(relation, args))
