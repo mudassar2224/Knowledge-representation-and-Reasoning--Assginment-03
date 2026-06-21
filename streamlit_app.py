@@ -1,8 +1,8 @@
-# streamlit_app.py
-# A2: Complete fixed version with all Streamlit collection bugs resolved.
-# Fix 1: Add button hidden during collection (prevents accidental restart)
-# Fix 2: Simple placeholder (eliminates stale step-behind confusion)
-# Fix 3: st.rerun() after every answer (forces correct state on screen)
+# streamlit_app.py — Assignment 3
+# Changes from A2:
+#   - Import load_graph instead of load_kb
+#   - Status message: "Neo4j graph connected"
+#   - init_bot() calls load_graph()
 
 from pathlib import Path
 from functools import lru_cache
@@ -11,18 +11,18 @@ import streamlit as st
 
 from aiml_bot import load_aiml
 from chatbot import handle_input
-from prolog_engine import load_kb, query
+from neo4j_engine import load_graph, query    # ← CHANGED (was prolog_engine)
 from utils import PROPERTY_RELATIONS, RELATION_NAMES
 
 
-APP_TITLE    = "Family Knowledge Base Chatbot — A2"
+APP_TITLE    = "Family Knowledge Base Chatbot — A3"
 APP_SUBTITLE = (
-    "Prolog + AIML brain. Type 'add person' to add family members, "
+    "Neo4j Graph DB + AIML brain. Type 'add person' to add family members, "
     "then query relationships, properties, and more."
 )
 WELCOME_MESSAGE = (
     "Hello! I'm your family knowledge-base chatbot.\n\n"
-    "The knowledge base starts **empty**. "
+    "The graph starts **empty**. "
     "Type **add person** to add the first family member, "
     "then ask questions about them!"
 )
@@ -35,8 +35,6 @@ PROFILE_IMAGE_CANDIDATES = (
     ASSET_DIR / "profile.webp",
 )
 
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _find_profile_image():
     for candidate in PROFILE_IMAGE_CANDIDATES:
@@ -82,11 +80,9 @@ def _family_religions():
     return sorted(set(_extract_values(query("religion", ["X", "Y"]), var="Y")))
 
 
-# ── Bot initialisation (cached — runs once per session) ───────────────────────
-
 @lru_cache(maxsize=1)
 def init_bot():
-    load_kb()
+    load_graph()                              # ← CHANGED (was load_kb())
     load_aiml()
     return True
 
@@ -103,19 +99,13 @@ def kb_overview():
     }
 
 
-# ── Suggested queries ─────────────────────────────────────────────────────────
-
 def build_suggested_queries():
-    # Return empty during collection so no button can accidentally restart it
     if st.session_state.get("_collecting", False):
         return []
-
     members = _family_members()
     cities  = _family_cities()
-
     if not members:
         return ["add person", "list all members", "help", "hi"]
-
     focus = members[0]
     city  = cities[0] if cities else "lahore"
     return [
@@ -125,8 +115,6 @@ def build_suggested_queries():
         f"who lives in {city.title()}?",
     ]
 
-
-# ── Session helpers ───────────────────────────────────────────────────────────
 
 def reset_chat():
     st.session_state.messages    = [{"role": "assistant", "content": WELCOME_MESSAGE}]
@@ -139,41 +127,20 @@ def add_message(role, content):
     st.session_state.messages.append({"role": role, "content": content})
 
 
-# ── ask_bot — syncs collection state with session_state ───────────────────────
-
 def ask_bot(prompt: str):
-    """
-    Processes user input and keeps chatbot module state in sync with
-    st.session_state so collection survives Streamlit page reruns.
-
-    Flow:
-      1. Restore _collecting/_stage/_data from session_state into module
-      2. Call handle_input()
-      3. Save updated state back to session_state
-    """
     import chatbot as _chatbot
-
-    # 1. RESTORE
     _chatbot._collecting = st.session_state.get("_collecting", False)
     _chatbot._stage      = st.session_state.get("_stage",      0)
     _chatbot._data       = st.session_state.get("_data",       {}).copy()
-
-    # 2. PROCESS
     add_message("user", prompt)
     response = handle_input(prompt)
     add_message("assistant", response)
-
-    # 3. SAVE
     st.session_state["_collecting"] = _chatbot._collecting
     st.session_state["_stage"]      = _chatbot._stage
     st.session_state["_data"]       = _chatbot._data.copy()
-
-    # Clear KB stats cache when a person is successfully added
     if "Successfully added" in response:
         kb_overview.cache_clear()
 
-
-# ── Styles ────────────────────────────────────────────────────────────────────
 
 def apply_styles():
     st.markdown("""
@@ -189,21 +156,17 @@ def apply_styles():
     }
     section[data-testid="stSidebar"] {
         background: linear-gradient(180deg,
-            rgba(255,250,245,0.92) 0%,
-            rgba(242,251,255,0.90) 48%,
+            rgba(255,250,245,0.92) 0%, rgba(242,251,255,0.90) 48%,
             rgba(251,244,255,0.90) 100%);
         border-right: 1px solid rgba(255,157,115,0.22);
         backdrop-filter: blur(18px);
     }
     section[data-testid="stSidebar"] > div { background: transparent; }
     .hero-card {
-        position: relative; overflow: hidden;
-        padding: 1.25rem 1.45rem; border-radius: 24px;
-        border: 1px solid rgba(255,255,255,0.88);
-        background: linear-gradient(135deg,
-            rgba(255,255,255,0.80),
-            rgba(255,246,236,0.58),
-            rgba(243,248,255,0.78));
+        position: relative; overflow: hidden; padding: 1.25rem 1.45rem;
+        border-radius: 24px; border: 1px solid rgba(255,255,255,0.88);
+        background: linear-gradient(135deg, rgba(255,255,255,0.80),
+            rgba(255,246,236,0.58), rgba(243,248,255,0.78));
         box-shadow: 0 18px 45px rgba(51,65,85,0.10),
                     inset 0 1px 0 rgba(255,255,255,0.78);
         margin-bottom: 1rem;
@@ -212,83 +175,66 @@ def apply_styles():
         content: ""; position: absolute; inset: 0 auto auto 0;
         width: 100%; height: 6px;
         background: linear-gradient(90deg,
-            #ff8a5b 0%, #ffd166 28%, #59c3c3 58%,
-            #7c8bff 80%, #ff6aa2 100%);
+            #ff8a5b 0%, #ffd166 28%, #59c3c3 58%, #7c8bff 80%, #ff6aa2 100%);
     }
-    .hero-title {
-        font-size: 2.15rem; font-weight: 800; line-height: 1.1;
-        margin-bottom: .35rem; color: #1f2937;
-    }
-    .hero-subtitle { font-size: 1rem; color: #52606d; margin-bottom: .85rem; }
+    .hero-title { font-size:2.15rem; font-weight:800; line-height:1.1;
+                  margin-bottom:.35rem; color:#1f2937; }
+    .hero-subtitle { font-size:1rem; color:#52606d; margin-bottom:.85rem; }
     .pill {
-        display: inline-block; padding: .38rem .78rem; margin: .15rem .28rem 0 0;
-        border-radius: 999px;
-        background: linear-gradient(135deg,
-            rgba(255,255,255,0.92), rgba(245,249,255,0.80));
-        border: 1px solid rgba(255,255,255,0.96);
-        color: #405066; font-size: .82rem; font-weight: 600;
-        box-shadow: 0 8px 20px rgba(15,23,42,0.06);
+        display:inline-block; padding:.38rem .78rem; margin:.15rem .28rem 0 0;
+        border-radius:999px;
+        background:linear-gradient(135deg,rgba(255,255,255,0.92),rgba(245,249,255,0.80));
+        border:1px solid rgba(255,255,255,0.96); color:#405066;
+        font-size:.82rem; font-weight:600; box-shadow:0 8px 20px rgba(15,23,42,0.06);
     }
-    .section-label {
-        font-size: .82rem; text-transform: uppercase; letter-spacing: .12em;
-        color: #64748b; margin-bottom: .5rem; font-weight: 700;
-    }
+    .section-label { font-size:.82rem; text-transform:uppercase; letter-spacing:.12em;
+                     color:#64748b; margin-bottom:.5rem; font-weight:700; }
     .collecting-banner {
-        background: linear-gradient(135deg, #fff3cd, #fff8e1);
-        border: 1px solid #ffc107; border-radius: 12px;
-        padding: .6rem 1rem; margin-bottom: .8rem;
-        font-size: .88rem; color: #856404;
+        background:linear-gradient(135deg,#fff3cd,#fff8e1);
+        border:1px solid #ffc107; border-radius:12px;
+        padding:.6rem 1rem; margin-bottom:.8rem;
+        font-size:.88rem; color:#856404;
     }
     .stButton > button {
-        background: linear-gradient(135deg, #ff8a5b 0%, #ff72a0 55%, #7c8bff 100%);
-        color: white !important; border: none !important;
-        border-radius: 999px !important; padding: .7rem 1rem !important;
-        box-shadow: 0 12px 28px rgba(255,122,98,0.22);
-        transition: transform .18s ease, box-shadow .18s ease, filter .18s ease;
+        background:linear-gradient(135deg,#ff8a5b 0%,#ff72a0 55%,#7c8bff 100%);
+        color:white!important; border:none!important; border-radius:999px!important;
+        padding:.7rem 1rem!important; box-shadow:0 12px 28px rgba(255,122,98,0.22);
+        transition:transform .18s ease,box-shadow .18s ease,filter .18s ease;
     }
-    .stButton > button:hover {
-        transform: translateY(-1px); filter: saturate(1.05);
-    }
+    .stButton > button:hover { transform:translateY(-1px); filter:saturate(1.05); }
     div[data-testid="stChatInput"] {
-        background: linear-gradient(135deg,
-            rgba(255,255,255,0.88), rgba(247,250,255,0.95));
-        border: 1px solid rgba(126,151,255,0.30); border-radius: 20px;
-        box-shadow: 0 14px 32px rgba(15,23,42,0.08);
-        backdrop-filter: blur(18px);
+        background:linear-gradient(135deg,rgba(255,255,255,0.88),rgba(247,250,255,0.95));
+        border:1px solid rgba(126,151,255,0.30); border-radius:20px;
+        box-shadow:0 14px 32px rgba(15,23,42,0.08); backdrop-filter:blur(18px);
     }
     div[data-testid="stMetric"] {
-        background: linear-gradient(135deg,
-            rgba(255,255,255,0.82), rgba(245,250,255,0.72));
-        border: 1px solid rgba(255,255,255,0.9); border-radius: 18px;
-        padding: .25rem .65rem; box-shadow: 0 10px 24px rgba(15,23,42,0.05);
+        background:linear-gradient(135deg,rgba(255,255,255,0.82),rgba(245,250,255,0.72));
+        border:1px solid rgba(255,255,255,0.9); border-radius:18px;
+        padding:.25rem .65rem; box-shadow:0 10px 24px rgba(15,23,42,0.05);
     }
     div[data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] {
-        background: rgba(255,255,255,0.72);
-        border: 1px solid rgba(255,255,255,0.9); border-radius: 18px;
-        padding: .7rem .9rem; box-shadow: 0 12px 24px rgba(15,23,42,0.05);
+        background:rgba(255,255,255,0.72); border:1px solid rgba(255,255,255,0.9);
+        border-radius:18px; padding:.7rem .9rem;
+        box-shadow:0 12px 24px rgba(15,23,42,0.05);
     }
     </style>
     """, unsafe_allow_html=True)
 
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────
-
 def render_sidebar(assistant_avatar, overview):
     with st.sidebar:
         st.markdown("## Family Knowledge Base")
-
         if assistant_avatar:
             st.image(assistant_avatar, width=92)
         else:
-            st.markdown(
-                "<div style='font-size:3rem;text-align:center;'>💬</div>",
-                unsafe_allow_html=True)
+            st.markdown("<div style='font-size:3rem;text-align:center;'>💬</div>",
+                        unsafe_allow_html=True)
 
-        st.caption("Console and Streamlit share the same handle_input() logic.")
+        st.caption("Powered by Neo4j Graph DB + AIML.")
 
         st.markdown("<div class='section-label'>Live status</div>",
                     unsafe_allow_html=True)
-        st.success("Prolog KB loaded")
+        st.success("Neo4j graph connected")        # ← CHANGED message
         st.success("AIML loaded (family + collect)")
 
         is_collecting = st.session_state.get("_collecting", False)
@@ -306,9 +252,7 @@ def render_sidebar(assistant_avatar, overview):
 
         st.markdown("---")
 
-        # FIX 1: Hide the Add button while collecting
-        # so it cannot accidentally restart collection mid-flow
-        st.markdown("<div class='section-label'>Add to KB</div>",
+        st.markdown("<div class='section-label'>Add to Graph</div>",
                     unsafe_allow_html=True)
         if not is_collecting:
             if st.button("➕ Add family member", use_container_width=True):
@@ -330,21 +274,18 @@ def render_sidebar(assistant_avatar, overview):
 
         with st.expander("What this bot can do"):
             st.markdown(
-                "**A2 — Add data:**\n"
-                "- Type `add person` to add a new member\n"
-                "- Answer 9 questions step by step\n"
-                "- Facts saved to `family_kb.pl` automatically\n\n"
+                "**A3 — Neo4j Graph:**\n"
+                "- Type `add person` to add a member\n"
+                "- Data stored as nodes + edges in Neo4j\n"
+                "- No Prolog file — graph IS the knowledge base\n\n"
                 "**Query once added:**\n"
                 "- Relationships: father, mother, sibling, uncle, cousin\n"
                 "- Urdu: chacha, phoophi, maamu, khala, dada, nani\n"
-                "- Properties: dob, occupation, city, religion\n"
-                "- Yes/No queries and full profile summaries"
+                "- Recursive: ancestor, descendant, blood_relative\n"
+                "- Properties: dob, occupation, city, religion"
             )
-
         st.caption("Add your photo as assets/profile.png and push to GitHub.")
 
-
-# ── Header ────────────────────────────────────────────────────────────────────
 
 def render_header(assistant_avatar, suggested_queries):
     left_col, right_col = st.columns([0.84, 0.16])
@@ -369,11 +310,9 @@ def render_header(assistant_avatar, suggested_queries):
             st.image(assistant_avatar, width=96)
         else:
             st.markdown(
-                "<div class='hero-card' style='text-align:center;"
-                "font-size:3rem;'>💬</div>",
+                "<div class='hero-card' style='text-align:center;font-size:3rem;'>💬</div>",
                 unsafe_allow_html=True)
 
-    # Show yellow banner + NO buttons during collection
     if st.session_state.get("_collecting", False):
         stage = st.session_state.get("_stage", 0)
         data  = st.session_state.get("_data",  {})
@@ -381,26 +320,21 @@ def render_header(assistant_avatar, suggested_queries):
         st.markdown(
             f"<div class='collecting-banner'>"
             f"⏳ <strong>Adding {name}</strong> — Step {stage} of 9. "
-            f"Type your answer below and press Enter, "
-            f"or type <code>cancel</code> to stop."
+            f"Type your answer below and press Enter, or type <code>cancel</code> to stop."
             f"</div>",
             unsafe_allow_html=True)
-        return   # ← exits here, no suggested query buttons rendered
+        return
 
-    # Only show suggested queries when NOT collecting
     if suggested_queries:
         st.markdown("<div class='section-label'>Suggested questions</div>",
                     unsafe_allow_html=True)
         cols = st.columns(2)
         for i, sample in enumerate(suggested_queries):
             with cols[i % 2]:
-                if st.button(sample, key=f"sample_{i}",
-                             use_container_width=True):
+                if st.button(sample, key=f"sample_{i}", use_container_width=True):
                     ask_bot(sample)
                     st.rerun()
 
-
-# ── Conversation ──────────────────────────────────────────────────────────────
 
 def render_conversation(assistant_avatar):
     st.markdown("<div class='section-label'>Conversation</div>",
@@ -411,8 +345,6 @@ def render_conversation(assistant_avatar):
         with st.chat_message(msg["role"], avatar=avatar):
             st.markdown(msg["content"])
 
-
-# ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
     st.set_page_config(
@@ -434,18 +366,11 @@ def main():
     apply_styles()
     render_sidebar(assistant_avatar, overview)
 
-    # FIX 2: Simple placeholder — no step-specific dict
-    # The step-specific dict was always ONE step behind because it was
-    # computed BEFORE ask_bot() updated the stage. This generic message
-    # is always accurate and never confuses the user.
     if st.session_state.get("_collecting", False):
         placeholder = "Type your answer and press Enter ↵"
     else:
         placeholder = "Type 'add person' to add a member, or ask a question..."
 
-    # FIX 3: st.rerun() after every chat submission
-    # Forces a full re-render so the next question, banner, and
-    # placeholder all reflect the updated stage immediately.
     prompt = st.chat_input(placeholder)
     if prompt:
         ask_bot(prompt)

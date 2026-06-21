@@ -1,11 +1,12 @@
 # chatbot.py
-# A2: Python state machine for data collection.
-# Reliable in both console and Streamlit.
+# A3: Only 2 changes from A2:
+#   1. Import neo4j_engine instead of prolog_engine
+#   2. _handle_facts_ready() calls graph_builder instead of fact_builder
 
 import re
 
 from aiml_bot import get_aiml_response
-from prolog_engine import query, query_yes_no
+from neo4j_engine import query, query_yes_no          # ← CHANGED (was prolog_engine)
 from utils import (
     KNOWN_NAMES, PROPERTY_RELATIONS, RELATION_MAP, RELATION_NAMES,
     capitalize_name, clean_text, extract_names, find_relation,
@@ -25,7 +26,6 @@ KNOWN_OCCUPATIONS = {
 }
 UNARY_RELATIONS = {"male", "female"}
 
-# ── Collection state ──────────────────────────────────────────────────────────
 _collecting: bool = False
 _stage: int       = 0
 _data: dict       = {}
@@ -118,8 +118,6 @@ def _process_collection_step(user_input: str) -> str:
     return _prompt(_stage)
 
 
-# ── Main dispatcher ───────────────────────────────────────────────────────────
-
 def handle_input(user_input: str) -> str:
     global _collecting, _stage, _data
 
@@ -129,14 +127,12 @@ def handle_input(user_input: str) -> str:
 
     cleaned = clean_text(user_input)
 
-    # Cancel
     if _collecting and cleaned in {"cancel", "stop", "exit"}:
         _collecting = False
         _stage = 0
         _data = {}
-        return "Data collection cancelled. The knowledge base was not modified."
+        return "Data collection cancelled. The graph was not modified."
 
-    # "add person" during collection — don't restart, just re-show current prompt
     if _collecting and (cleaned in _ADD_TRIGGERS or bool(_ADD_RE.search(cleaned))):
         return (
             "You are already adding a member. "
@@ -144,18 +140,15 @@ def handle_input(user_input: str) -> str:
             + _prompt(_stage)
         )
 
-    # Start new collection
     if not _collecting and (cleaned in _ADD_TRIGGERS or bool(_ADD_RE.search(cleaned))):
         _collecting = True
         _stage = 1
         _data = {}
         return "Starting data collection for a new family member.\n\n" + _prompt(1)
 
-    # In-progress collection — all input handled by Python, not AIML
     if _collecting:
         return _process_collection_step(user_input)
 
-    # Normal A1 query flow
     if _is_aiml_intent(user_input):
         response = get_aiml_response(user_input)
         if response:
@@ -164,9 +157,15 @@ def handle_input(user_input: str) -> str:
     return _prolog_dispatch(user_input)
 
 
+# ── A3: Updated _handle_facts_ready ──────────────────────────────────────────
+
 def _handle_facts_ready() -> str:
-    from fact_builder import build_facts, save_facts_to_kb, person_exists
-    from prolog_engine import reload_kb
+    """
+    Called when all 9 collection steps are done.
+    Saves the collected data to Neo4j (replaces writing to .pl file).
+    """
+    from graph_builder import save_to_graph, person_exists   # ← CHANGED
+    from neo4j_engine import reload_graph                     # ← CHANGED
 
     data = _data.copy()
     name = data.get("name", "").strip().lower()
@@ -180,14 +179,14 @@ def _handle_facts_ready() -> str:
             f"Try: tell me about {capitalize_name(name)}"
         )
 
-    facts = build_facts(data)
-    if not facts:
-        return "Error: Could not create valid Prolog facts. Please try 'add person' again."
+    # Save to Neo4j graph (replaces fact_builder + family_kb.pl)
+    success, message = save_to_graph(data)                    # ← CHANGED
 
-    if not save_facts_to_kb(facts):
-        return "Error: Could not write to family_kb.pl. Please try again."
+    if not success:
+        return f"Error: {message}. Please try 'add person' again."
 
-    reload_kb()
+    # Reload graph to sync KNOWN_NAMES
+    reload_graph()                                             # ← CHANGED
 
     city       = data.get("city",       "unknown").lower()
     occupation = data.get("occupation", "unknown").lower()
@@ -196,10 +195,8 @@ def _handle_facts_ready() -> str:
     if occupation and occupation != "unknown":
         KNOWN_OCCUPATIONS.add(occupation)
 
-    main_facts = [f for f in facts if not f.startswith("different")]
     return (
-        f"Successfully added {capitalize_name(name)} to the family knowledge base!\n"
-        f"Saved {len(main_facts)} facts to family_kb.pl.\n\n"
+        f"Successfully added {capitalize_name(name)} to the Neo4j graph!\n\n"
         f"You can now query:\n"
         f"  tell me about {capitalize_name(name)}\n"
         f"  who is {capitalize_name(name)}'s father?\n"
@@ -207,7 +204,7 @@ def _handle_facts_ready() -> str:
     )
 
 
-# ── A1 functions — unchanged ──────────────────────────────────────────────────
+# ── All A1 functions below — completely unchanged ─────────────────────────────
 
 def _is_aiml_intent(text):
     cleaned = clean_text(text)
@@ -235,9 +232,7 @@ def _prolog_dispatch(text):
     cleaned = clean_text(text)
     if not cleaned:
         return "Please type a question."
-
     names = extract_names(cleaned)
-
     yes_no = _answer_yes_no(cleaned, names)
     if yes_no:
         return yes_no
@@ -274,10 +269,7 @@ def _prolog_dispatch(text):
         return unknown_name_answer
     if _looks_like_profile_request(cleaned) and not names:
         if re.search(r"\b(someone|someone else|person|member|not in the family|not in this family)\b", cleaned):
-            return (
-                "I can only describe family members in the knowledge base. "
-                "Type 'add person' to add a new member."
-            )
+            return "I can only describe family members in the graph. Type 'add person' to add a new member."
     if len(names) == 1:
         return _all_about(names[0])
     return _fallback()
@@ -292,7 +284,7 @@ def _answer_yes_no(text, names):
         if relation in RELATION_NAMES:
             missing = [capitalize_name(n) for n in (x, y) if n not in KNOWN_NAMES]
             if missing:
-                return f"Sorry, I do not have {', '.join(missing)} in this family KB."
+                return f"Sorry, I do not have {', '.join(missing)} in this family graph."
             if _valid_person_pair(x, y):
                 return format_yes_no(relation, x, y, query_yes_no(relation, [x, y]))
     m = re.search(r"\bis\s+(\w+)\s+(?:a|an\s+)?(male|female)\b", text)
@@ -300,7 +292,7 @@ def _answer_yes_no(text, names):
         person = normalize_atom(m.group(1))
         relation = normalize_atom(m.group(2))
         if person not in KNOWN_NAMES:
-            return f"Sorry, I do not have {capitalize_name(person)} in this family KB."
+            return f"Sorry, I do not have {capitalize_name(person)} in this family graph."
         result = bool(query(relation, [person]))
         return (f"Yes, {capitalize_name(person)} is {relation}."
                 if result else f"No, {capitalize_name(person)} is not {relation}.")
@@ -308,7 +300,7 @@ def _answer_yes_no(text, names):
     if m:
         person = normalize_atom(m.group(1))
         if person not in KNOWN_NAMES:
-            return f"Sorry, I do not have {capitalize_name(person)} in this family KB."
+            return f"Sorry, I do not have {capitalize_name(person)} in this family graph."
         result = bool(query("spouse", [person, "X"])) or bool(query("married", [person, "X"]))
         return (f"Yes, {capitalize_name(person)} is married."
                 if result else f"No, {capitalize_name(person)} is not married.")
@@ -317,7 +309,7 @@ def _answer_yes_no(text, names):
         x, y = normalize_atom(m.group(1)), normalize_atom(m.group(2))
         missing = [capitalize_name(n) for n in (x, y) if n not in KNOWN_NAMES]
         if missing:
-            return f"Sorry, I do not have {', '.join(missing)} in this family KB."
+            return f"Sorry, I do not have {', '.join(missing)} in this family graph."
         if _valid_person_pair(x, y):
             return format_yes_no("spouse", x, y, query_yes_no("spouse", [x, y]))
     m = re.search(r"\bis\s+(\w+)\s+related\s+to\s+(\w+)\b", text)
@@ -325,7 +317,7 @@ def _answer_yes_no(text, names):
         x, y = normalize_atom(m.group(1)), normalize_atom(m.group(2))
         missing = [capitalize_name(n) for n in (x, y) if n not in KNOWN_NAMES]
         if missing:
-            return f"Sorry, I do not have {', '.join(missing)} in this family KB."
+            return f"Sorry, I do not have {', '.join(missing)} in this family graph."
         if _valid_person_pair(x, y):
             return format_yes_no("blood_relative", x, y, query_yes_no("blood_relative", [x, y]))
     m = re.search(r"\b(?:are|re)\s+(\w+)\s+and\s+(\w+)\s+(?:related|blood relatives|relatives)\b", text)
@@ -333,28 +325,28 @@ def _answer_yes_no(text, names):
         x, y = normalize_atom(m.group(1)), normalize_atom(m.group(2))
         missing = [capitalize_name(n) for n in (x, y) if n not in KNOWN_NAMES]
         if missing:
-            return f"Sorry, I do not have {', '.join(missing)} in this family KB."
+            return f"Sorry, I do not have {', '.join(missing)} in this family graph."
         if _valid_person_pair(x, y):
             return format_yes_no("blood_relative", x, y, query_yes_no("blood_relative", [x, y]))
     m = re.search(r"\bdoes\s+(\w+)\s+(?:live|lives|reside)\s+(?:in|at)\s+(\w+)\b", text)
     if m:
         person, city = normalize_atom(m.group(1)), normalize_atom(m.group(2))
         if person not in KNOWN_NAMES:
-            return f"Sorry, I do not have {capitalize_name(person)} in this family KB."
+            return f"Sorry, I do not have {capitalize_name(person)} in this family graph."
         if city in KNOWN_CITIES:
             return _property_yes_no("lives in", person, city, query_yes_no("lives_in", [person, city]))
     m = re.search(r"\bis\s+(\w+)\s+from\s+(\w+)\b", text)
     if m:
         person, city = normalize_atom(m.group(1)), normalize_atom(m.group(2))
         if person not in KNOWN_NAMES:
-            return f"Sorry, I do not have {capitalize_name(person)} in this family KB."
+            return f"Sorry, I do not have {capitalize_name(person)} in this family graph."
         if city in KNOWN_CITIES:
             return _property_yes_no("from", person, city, query_yes_no("lives_in", [person, city]))
     m = re.search(r"\bis\s+(\w+)\s+(?:a|an)\s+(\w+)\b", text)
     if m:
         person, occupation = normalize_atom(m.group(1)), _singular(normalize_atom(m.group(2)))
         if person not in KNOWN_NAMES:
-            return f"Sorry, I do not have {capitalize_name(person)} in this family KB."
+            return f"Sorry, I do not have {capitalize_name(person)} in this family graph."
         if occupation in KNOWN_OCCUPATIONS:
             return _property_yes_no("a", person, occupation, query_yes_no("occupation", [person, occupation]))
     m = re.search(r"\bdoes\s+(\w+)\s+have\s+(.+)\b", text)
@@ -362,7 +354,7 @@ def _answer_yes_no(text, names):
         person = normalize_atom(m.group(1))
         relation = find_relation(m.group(2))
         if person not in KNOWN_NAMES:
-            return f"Sorry, I do not have {capitalize_name(person)} in this family KB."
+            return f"Sorry, I do not have {capitalize_name(person)} in this family graph."
         if relation in RELATION_NAMES:
             results = _dedupe(query(relation, ["X", person]))
             return (f"Yes, {capitalize_name(person)} has {label_for(relation)}."
@@ -495,7 +487,7 @@ def _answer_occupation_list(text):
 
 def _answer_unknown_name_question(text):
     if re.search(r"\bnot in (?:the|this) family\b", text):
-        return "I can only describe family members that exist in the knowledge base."
+        return "I can only describe family members that exist in the knowledge graph."
     patterns = (
         r"\b(?:who|what)\s+is\s+(\w+)\s+s\s+(.+)$",
         r"\b(?:who|what)\s+is\s+(\w+)\s+(?:a|an|the)?\s+(.+)$",
@@ -509,7 +501,7 @@ def _answer_unknown_name_question(text):
         person = normalize_atom(m.group(1))
         relation = find_relation(m.group(2))
         if relation and person not in KNOWN_NAMES:
-            return f"Sorry, I do not have {capitalize_name(person)} in this family KB."
+            return f"Sorry, I do not have {capitalize_name(person)} in this family graph."
     return None
 
 
@@ -527,7 +519,7 @@ def _all_about(person):
     if person not in KNOWN_NAMES:
         return (
             f"Sorry, I have no information about {capitalize_name(person)}. "
-            f"Type 'add person' to add them to the knowledge base."
+            f"Type 'add person' to add them to the graph."
         )
     lines = [f"Here is what I know about {capitalize_name(person)}:"]
 
@@ -566,12 +558,12 @@ def _singular(word):
 
 def _fallback():
     return (
-        "I can answer family knowledge-base questions. Try:\n"
+        "I can answer family knowledge-graph questions. Try:\n"
         "  add person                 ← add a new family member\n"
         "  who is Ali's father?\n"
         "  tell me about Ali\n"
         "  is Shakeel an ancestor of Zain?\n"
         "  who lives in Lahore?\n"
         "  list all members\n\n"
-        "The KB is empty until you add people via 'add person'."
+        "The graph is empty until you add people via 'add person'."
     )
