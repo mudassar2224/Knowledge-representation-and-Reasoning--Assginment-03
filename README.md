@@ -1,4 +1,5 @@
 <<<<<<< HEAD
+<<<<<<< HEAD
 # Family Knowledge Base Chatbot
 
 A family-reasoning chatbot with **two interfaces powered by the same brain**:
@@ -198,3 +199,6 @@ Family_Chatboat/
 =======
 # Knowledge-representation-and-Reasoning--Assginment-02
 >>>>>>> bc0f70ba0cf363b1b794ad771a1d41f81ee4f147
+=======
+# Knowledge-representation-and-Reasoning--Assginment-03
+>>>>>>> 30e313c0a3ce96455d6c57db52a877cd1a2e9735
