@@ -18,8 +18,10 @@ _driver = None
 def _get_driver():
     global _driver
     if _driver is None:
+        from neo4j_config import NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD
         _driver = GraphDatabase.driver(
-            NEO4J_URI, auth=(NEO4J_USERNAME, NEO4J_PASSWORD)
+            NEO4J_URI,
+            auth=(NEO4J_USERNAME, NEO4J_PASSWORD),
         )
     return _driver
 
@@ -27,7 +29,8 @@ def _get_driver():
 def _run(cypher: str, params: dict = None) -> list:
     """Execute Cypher and return a list of record dicts."""
     try:
-        with _get_driver().session() as session:
+        from neo4j_config import NEO4J_DATABASE
+        with _get_driver().session(database=NEO4J_DATABASE) as session:
             result = session.run(cypher, params or {})
             return [dict(r) for r in result]
     except Exception as e:
@@ -44,15 +47,16 @@ def _is_var(s: str) -> bool:
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def load_graph():
-    """Test the Neo4j connection and report graph size."""
+    """Test the Neo4j Aura connection and report graph size."""
     try:
         rows = _run("MATCH (p:Person) RETURN count(p) AS n")
         n = rows[0]["n"] if rows else 0
-        print(f"[Neo4j] Connected to local Neo4j. {n} people in graph.")
+        print(f"[Neo4j] Connected successfully. {n} people in graph.")
         return True
     except Exception as e:
-        print(f"[Neo4j ERROR] Connection failed: {e}")
-        print("  Make sure Neo4j Desktop is running on bolt://localhost:7687")
+        print(f"[Neo4j] Connection FAILED: {e}")
+        print("  Check that your Aura instance is Running at console.neo4j.io")
+        print("  Check that Streamlit secrets are set correctly.")
         return False
 
 
