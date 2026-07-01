@@ -1,6 +1,4 @@
 # neo4j_config.py
-# Reads from Streamlit secrets on cloud.
-# Falls back to Aura credentials locally.
 
 def get_neo4j_config():
     """Return (uri, username, password, database) from the right source."""
@@ -16,10 +14,10 @@ def get_neo4j_config():
     except Exception:
         # Local fallback
         return (
-            "neo4j+s://d23b33f1.databases.neo4j.io",
-            "d23b33f1",
-            "3_k7cisfzjZ--Pw6qd5cBGyCpRSUZWWYUQPag51419o",
-            "d23b33f1",
+            "neo4j+s://4795b127.databases.neo4j.io",
+            "4795b127",
+            "ZyqVhHGNyhr9_m8zrrfcM9nEdm-YQsIIMtF-PTpvLks",
+            "4795b127",
         )
 
 
