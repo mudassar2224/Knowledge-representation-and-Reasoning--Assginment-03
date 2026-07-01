@@ -1,5 +1,7 @@
 # chatbot.py
 # A3 Complete: Neo4j + Graph Analysis + Inference + Hybrid Reasoning (Bonus)
+# FIX: Uses is_known_person() (queries Neo4j directly) instead of stale
+#      in-memory KNOWN_NAMES set, which was causing false "not found" errors.
 
 import re
 
@@ -9,7 +11,7 @@ from utils import (
     KNOWN_NAMES, PROPERTY_RELATIONS, RELATION_MAP, RELATION_NAMES,
     capitalize_name, clean_text, extract_names, find_relation,
     format_response, format_value, format_yes_no, is_safe_atom,
-    label_for, normalize_atom, words,
+    is_known_person, label_for, normalize_atom, words,
 )
 
 AIML_ONLY_PATTERNS = [
@@ -125,14 +127,12 @@ def handle_input(user_input: str) -> str:
 
     cleaned = clean_text(user_input)
 
-    # ── Cancel collection ────────────────────────────────────────────────────
     if _collecting and cleaned in {"cancel", "stop", "exit"}:
         _collecting = False
         _stage = 0
         _data = {}
         return "Data collection cancelled. The graph was not modified."
 
-    # ── Add person during collection → re-show current prompt ───────────────
     if _collecting and (cleaned in _ADD_TRIGGERS or bool(_ADD_RE.search(cleaned))):
         return (
             "You are already adding a member. "
@@ -140,39 +140,32 @@ def handle_input(user_input: str) -> str:
             + _prompt(_stage)
         )
 
-    # ── Start new collection ─────────────────────────────────────────────────
     if not _collecting and (cleaned in _ADD_TRIGGERS or bool(_ADD_RE.search(cleaned))):
         _collecting = True
         _stage = 1
         _data = {}
         return "Starting data collection for a new family member.\n\n" + _prompt(1)
 
-    # ── In-progress collection ───────────────────────────────────────────────
     if _collecting:
         return _process_collection_step(user_input)
 
-    # ── Greetings / Help / Farewell ──────────────────────────────────────────
     if _is_aiml_intent(user_input):
         response = get_aiml_response(user_input)
         if response:
             return response
 
-    # ── Priority 1: Graph Analysis ───────────────────────────────────────────
     analysis_answer = _answer_graph_analysis(cleaned)
     if analysis_answer:
         return analysis_answer
 
-    # ── Priority 2: Inference and Discovery ─────────────────────────────────
     inference_answer = _answer_inference(cleaned)
     if inference_answer:
         return inference_answer
 
-    # ── Priority 3 (Bonus): Hybrid Neo4j-Prolog Reasoning ───────────────────
     hybrid_answer = _answer_hybrid_reasoning(cleaned)
     if hybrid_answer:
         return hybrid_answer
 
-    # ── Normal family query dispatch ─────────────────────────────────────────
     return _prolog_dispatch(user_input)
 
 
@@ -232,19 +225,14 @@ def _answer_graph_analysis(text: str):
 
     if re.search(r"\b(graph statistics|graph stats|analyze.*graph|graph analysis)\b", text):
         return format_graph_stats_response()
-
     if re.search(r"\b(node labels?|labels? exist|show.*labels?)\b", text):
         return format_graph_stats_response()
-
     if re.search(r"\b(relationship types?|relationship breakdown|show.*relationship types?)\b", text):
         return format_relationship_breakdown_response()
-
     if re.search(r"\b(most connected|who has the most connections|most connections)\b", text):
         return format_most_connected_response()
-
     if re.search(r"\b(data completeness|data quality|completeness report)\b", text):
         return format_completeness_response()
-
     return None
 
 
@@ -267,16 +255,12 @@ def _answer_inference(text: str):
 
     if re.search(r"\b(have in common|mutual connections?|common relatives?)\b", text) and len(names) >= 2:
         return format_mutual_connections_response(names[0], names[1])
-
     if re.search(r"\b(hidden relationships?|hidden connections?|discover.*hidden)\b", text) and len(names) >= 1:
         return format_hidden_relationships_response(names[0])
-
     if re.search(r"\b(recommend|suggest).{0,20}connect|connect with\b", text) and len(names) >= 1:
         return format_recommendations_response(names[0])
-
     if re.search(r"\b(how.*connected|connection strength|relationship path|path between)\b", text) and len(names) >= 2:
         return format_connection_strength_response(names[0], names[1])
-
     return None
 
 
@@ -302,7 +286,7 @@ def _answer_hybrid_reasoning(text: str):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# STANDARD FAMILY QUERY DISPATCH (A1/A2 — UNCHANGED)
+# STANDARD FAMILY QUERY DISPATCH — FIXED to use is_known_person()
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _is_aiml_intent(text):
@@ -348,8 +332,13 @@ def _prolog_dispatch(text):
     family_list = _answer_family_member_list(cleaned)
     if family_list:
         return family_list
-    if _looks_like_profile_request(cleaned) and names:
-        return _all_about(names[0])
+
+    if names:
+        for candidate in names:
+            if is_known_person(candidate):
+                if _looks_like_profile_request(cleaned):
+                    return _all_about(candidate)
+
     relation = find_relation(cleaned)
     if relation in PROPERTY_RELATIONS and names:
         return _answer_property(relation, names[0])
@@ -370,8 +359,10 @@ def _prolog_dispatch(text):
     if _looks_like_profile_request(cleaned) and not names:
         if re.search(r"\b(someone|someone else|person|member|not in the family|not in this family)\b", cleaned):
             return "I can only describe family members in the graph. Type 'add person' to add a new member."
-    if len(names) == 1:
+
+    if len(names) == 1 and is_known_person(names[0]):
         return _all_about(names[0])
+
     return _fallback()
 
 
@@ -382,7 +373,7 @@ def _answer_yes_no(text, names):
         relation = find_relation(m.group(2))
         y = normalize_atom(m.group(3))
         if relation in RELATION_NAMES:
-            missing = [capitalize_name(n) for n in (x, y) if n not in KNOWN_NAMES]
+            missing = [capitalize_name(n) for n in (x, y) if not is_known_person(n)]
             if missing:
                 return f"Sorry, I do not have {', '.join(missing)} in this family graph."
             if _valid_person_pair(x, y):
@@ -391,7 +382,7 @@ def _answer_yes_no(text, names):
     if m:
         person = normalize_atom(m.group(1))
         relation = normalize_atom(m.group(2))
-        if person not in KNOWN_NAMES:
+        if not is_known_person(person):
             return f"Sorry, I do not have {capitalize_name(person)} in this family graph."
         result = bool(query(relation, [person]))
         return (f"Yes, {capitalize_name(person)} is {relation}."
@@ -399,7 +390,7 @@ def _answer_yes_no(text, names):
     m = re.search(r"\bis\s+(\w+)\s+married\b(?!\s+(?:to|with|for))", text)
     if m:
         person = normalize_atom(m.group(1))
-        if person not in KNOWN_NAMES:
+        if not is_known_person(person):
             return f"Sorry, I do not have {capitalize_name(person)} in this family graph."
         result = bool(query("spouse", [person, "X"])) or bool(query("married", [person, "X"]))
         return (f"Yes, {capitalize_name(person)} is married."
@@ -407,7 +398,7 @@ def _answer_yes_no(text, names):
     m = re.search(r"\bare\s+(\w+)\s+and\s+(\w+)\s+married\b", text)
     if m:
         x, y = normalize_atom(m.group(1)), normalize_atom(m.group(2))
-        missing = [capitalize_name(n) for n in (x, y) if n not in KNOWN_NAMES]
+        missing = [capitalize_name(n) for n in (x, y) if not is_known_person(n)]
         if missing:
             return f"Sorry, I do not have {', '.join(missing)} in this family graph."
         if _valid_person_pair(x, y):
@@ -415,7 +406,7 @@ def _answer_yes_no(text, names):
     m = re.search(r"\bis\s+(\w+)\s+related\s+to\s+(\w+)\b", text)
     if m:
         x, y = normalize_atom(m.group(1)), normalize_atom(m.group(2))
-        missing = [capitalize_name(n) for n in (x, y) if n not in KNOWN_NAMES]
+        missing = [capitalize_name(n) for n in (x, y) if not is_known_person(n)]
         if missing:
             return f"Sorry, I do not have {', '.join(missing)} in this family graph."
         if _valid_person_pair(x, y):
@@ -423,7 +414,7 @@ def _answer_yes_no(text, names):
     m = re.search(r"\b(?:are|re)\s+(\w+)\s+and\s+(\w+)\s+(?:related|blood relatives|relatives)\b", text)
     if m:
         x, y = normalize_atom(m.group(1)), normalize_atom(m.group(2))
-        missing = [capitalize_name(n) for n in (x, y) if n not in KNOWN_NAMES]
+        missing = [capitalize_name(n) for n in (x, y) if not is_known_person(n)]
         if missing:
             return f"Sorry, I do not have {', '.join(missing)} in this family graph."
         if _valid_person_pair(x, y):
@@ -431,21 +422,21 @@ def _answer_yes_no(text, names):
     m = re.search(r"\bdoes\s+(\w+)\s+(?:live|lives|reside)\s+(?:in|at)\s+(\w+)\b", text)
     if m:
         person, city = normalize_atom(m.group(1)), normalize_atom(m.group(2))
-        if person not in KNOWN_NAMES:
+        if not is_known_person(person):
             return f"Sorry, I do not have {capitalize_name(person)} in this family graph."
         if city in KNOWN_CITIES:
             return _property_yes_no("lives in", person, city, query_yes_no("lives_in", [person, city]))
     m = re.search(r"\bis\s+(\w+)\s+from\s+(\w+)\b", text)
     if m:
         person, city = normalize_atom(m.group(1)), normalize_atom(m.group(2))
-        if person not in KNOWN_NAMES:
+        if not is_known_person(person):
             return f"Sorry, I do not have {capitalize_name(person)} in this family graph."
         if city in KNOWN_CITIES:
             return _property_yes_no("from", person, city, query_yes_no("lives_in", [person, city]))
     m = re.search(r"\bis\s+(\w+)\s+(?:a|an)\s+(\w+)\b", text)
     if m:
         person, occupation = normalize_atom(m.group(1)), _singular(normalize_atom(m.group(2)))
-        if person not in KNOWN_NAMES:
+        if not is_known_person(person):
             return f"Sorry, I do not have {capitalize_name(person)} in this family graph."
         if occupation in KNOWN_OCCUPATIONS:
             return _property_yes_no("a", person, occupation, query_yes_no("occupation", [person, occupation]))
@@ -453,7 +444,7 @@ def _answer_yes_no(text, names):
     if m:
         person = normalize_atom(m.group(1))
         relation = find_relation(m.group(2))
-        if person not in KNOWN_NAMES:
+        if not is_known_person(person):
             return f"Sorry, I do not have {capitalize_name(person)} in this family graph."
         if relation in RELATION_NAMES:
             results = _dedupe(query(relation, ["X", person]))
@@ -469,7 +460,7 @@ def _answer_unary_status(text):
         return None
     person = normalize_atom(m.group(1))
     relation = normalize_atom(m.group(2))
-    if person not in KNOWN_NAMES or relation not in UNARY_RELATIONS:
+    if not is_known_person(person) or relation not in UNARY_RELATIONS:
         return None
     result = bool(query(relation, [person]))
     return (f"Yes, {capitalize_name(person)} is {relation}."
@@ -477,7 +468,7 @@ def _answer_unary_status(text):
 
 
 def _valid_person_pair(x, y):
-    return x in KNOWN_NAMES and y in KNOWN_NAMES and is_safe_atom(x) and is_safe_atom(y)
+    return is_known_person(x) and is_known_person(y) and is_safe_atom(x) and is_safe_atom(y)
 
 
 def _property_yes_no(label, person, value, result):
@@ -600,7 +591,7 @@ def _answer_unknown_name_question(text):
             continue
         person = normalize_atom(m.group(1))
         relation = find_relation(m.group(2))
-        if relation and person not in KNOWN_NAMES:
+        if relation and not is_known_person(person):
             return f"Sorry, I do not have {capitalize_name(person)} in this family graph."
     return None
 
@@ -616,7 +607,7 @@ def _answer_relationship(relation, person):
 
 
 def _all_about(person):
-    if person not in KNOWN_NAMES:
+    if not is_known_person(person):
         return (
             f"Sorry, I have no information about {capitalize_name(person)}. "
             f"Type 'add person' to add them to the graph."

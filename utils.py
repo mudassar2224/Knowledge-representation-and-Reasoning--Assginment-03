@@ -293,11 +293,64 @@ def format_yes_no(relation: str, x: str, y: str, result: bool) -> str:
     return f"No, {xc} is not {yc}'s {label}."
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# FIX: Neo4j-backed person existence check.
+# The static KNOWN_NAMES set can go stale across Streamlit reruns
+# (each rerun may create a fresh module state depending on caching).
+# Neo4j is the actual source of truth, so we always verify against it.
+# ─────────────────────────────────────────────────────────────────────────
+
+def is_known_person(name: str) -> bool:
+    """
+    Check if a person exists in the graph.
+    Checks the static KNOWN_NAMES set first (fast path), then falls
+    back to querying Neo4j directly (authoritative source of truth).
+    """
+    name = str(name).lower().strip()
+    if not name:
+        return False
+
+    if name in KNOWN_NAMES:
+        return True
+
+    try:
+        from neo4j_engine import person_exists_in_graph
+        found = person_exists_in_graph(name)
+        if found:
+            KNOWN_NAMES.add(name)  # cache for the rest of this session
+        return found
+    except Exception:
+        return False
+
+
 def extract_names(text):
+    """
+    Extract known person names from text.
+    Checks the static KNOWN_NAMES set first, then queries Neo4j
+    directly for any remaining candidate words, since KNOWN_NAMES
+    can go stale across Streamlit reruns.
+    """
     found = []
-    for word in words(text):
+    word_list = words(text)
+
+    for word in word_list:
         if word in KNOWN_NAMES and word not in found:
             found.append(word)
+
+    if not found:
+        skip_words = {
+            "tell", "me", "about", "who", "is", "the", "of", "what",
+            "where", "does", "live", "lives", "for", "and", "are",
+            "father", "mother", "name", "show", "list", "all",
+            "has", "have", "in", "a", "an", "to", "with", "s",
+            "hi", "hello", "hey",
+        }
+        for word in word_list:
+            if word in skip_words or len(word) < 2:
+                continue
+            if is_known_person(word) and word not in found:
+                found.append(word)
+
     return found
 
 
