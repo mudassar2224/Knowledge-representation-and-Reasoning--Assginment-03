@@ -1,8 +1,5 @@
-# streamlit_app.py — Assignment 3
-# Changes from A2:
-#   - Import load_graph instead of load_kb
-#   - Status message: "Neo4j graph connected"
-#   - init_bot() calls load_graph()
+# streamlit_app.py — Assignment 3 Complete
+# All priorities: Graph Analysis + Inference + Hybrid Reasoning
 
 from pathlib import Path
 from functools import lru_cache
@@ -11,20 +8,24 @@ import streamlit as st
 
 from aiml_bot import load_aiml
 from chatbot import handle_input
-from neo4j_engine import load_graph, query    # ← CHANGED (was prolog_engine)
+from neo4j_engine import load_graph, query
 from utils import PROPERTY_RELATIONS, RELATION_NAMES
 
 
 APP_TITLE    = "Family Knowledge Base Chatbot — A3"
 APP_SUBTITLE = (
     "Neo4j Graph DB + AIML brain. Type 'add person' to add family members, "
-    "then query relationships, properties, and more."
+    "then query relationships, run graph analysis, and perform inference."
 )
 WELCOME_MESSAGE = (
     "Hello! I'm your family knowledge-base chatbot.\n\n"
     "The graph starts **empty**. "
     "Type **add person** to add the first family member, "
-    "then ask questions about them!"
+    "then ask questions about them!\n\n"
+    "**New features:**\n"
+    "- `show graph statistics` — analyze the graph structure\n"
+    "- `what do Ali and Asad have in common` — inference\n"
+    "- `run hybrid reasoning` — Neo4j + Prolog hybrid (bonus)"
 )
 
 ASSET_DIR = Path(__file__).resolve().parent / "assets"
@@ -82,7 +83,7 @@ def _family_religions():
 
 @lru_cache(maxsize=1)
 def init_bot():
-    load_graph()                              # ← CHANGED (was load_kb())
+    load_graph()
     load_aiml()
     return True
 
@@ -105,13 +106,13 @@ def build_suggested_queries():
     members = _family_members()
     cities  = _family_cities()
     if not members:
-        return ["add person", "list all members", "help", "hi"]
+        return ["add person", "list all members", "show graph statistics", "hi"]
     focus = members[0]
     city  = cities[0] if cities else "lahore"
     return [
         "add person",
         f"tell me about {focus.title()}",
-        f"who is {focus.title()}'s father?",
+        "show graph statistics",
         f"who lives in {city.title()}?",
     ]
 
@@ -129,15 +130,22 @@ def add_message(role, content):
 
 def ask_bot(prompt: str):
     import chatbot as _chatbot
+
+    # Restore collection state
     _chatbot._collecting = st.session_state.get("_collecting", False)
     _chatbot._stage      = st.session_state.get("_stage",      0)
     _chatbot._data       = st.session_state.get("_data",       {}).copy()
+
     add_message("user", prompt)
     response = handle_input(prompt)
     add_message("assistant", response)
+
+    # Save collection state
     st.session_state["_collecting"] = _chatbot._collecting
     st.session_state["_stage"]      = _chatbot._stage
     st.session_state["_data"]       = _chatbot._data.copy()
+
+    # Clear KB stats cache when a person is added
     if "Successfully added" in response:
         kb_overview.cache_clear()
 
@@ -224,18 +232,20 @@ def apply_styles():
 def render_sidebar(assistant_avatar, overview):
     with st.sidebar:
         st.markdown("## Family Knowledge Base")
+
         if assistant_avatar:
             st.image(assistant_avatar, width=92)
         else:
             st.markdown("<div style='font-size:3rem;text-align:center;'>💬</div>",
                         unsafe_allow_html=True)
 
-        st.caption("Powered by Neo4j Graph DB + AIML.")
+        st.caption("Neo4j Graph DB + AIML + Hybrid Prolog Reasoning.")
 
+        # Live status
         st.markdown("<div class='section-label'>Live status</div>",
                     unsafe_allow_html=True)
-        st.success("Neo4j graph connected")        # ← CHANGED message
-        st.success("AIML loaded (family + collect)")
+        st.success("Neo4j graph connected")
+        st.success("AIML loaded (family + collect + analysis)")
 
         is_collecting = st.session_state.get("_collecting", False)
         stage         = st.session_state.get("_stage", 0)
@@ -243,6 +253,7 @@ def render_sidebar(assistant_avatar, overview):
         if is_collecting and stage > 0:
             st.warning(f"⏳ Collecting — Step {stage}/9 in progress")
 
+        # Stats
         r1 = st.columns(2)
         r1[0].metric("People",     overview["people_count"])
         r1[1].metric("Cities",     overview["city_count"])
@@ -252,6 +263,7 @@ def render_sidebar(assistant_avatar, overview):
 
         st.markdown("---")
 
+        # Add member
         st.markdown("<div class='section-label'>Add to Graph</div>",
                     unsafe_allow_html=True)
         if not is_collecting:
@@ -266,6 +278,36 @@ def render_sidebar(assistant_avatar, overview):
                 ask_bot("cancel")
                 st.rerun()
 
+        st.markdown("---")
+
+        # Graph analysis quick buttons
+        st.markdown("<div class='section-label'>Graph Analysis</div>",
+                    unsafe_allow_html=True)
+        if st.button("📊 Graph statistics", use_container_width=True):
+            ask_bot("show graph statistics")
+            st.rerun()
+        if st.button("🔗 Relationship breakdown", use_container_width=True):
+            ask_bot("what relationship types exist")
+            st.rerun()
+        if st.button("⭐ Most connected person", use_container_width=True):
+            ask_bot("who has the most connections")
+            st.rerun()
+        if st.button("✅ Data completeness", use_container_width=True):
+            ask_bot("show data completeness")
+            st.rerun()
+
+        st.markdown("---")
+
+        # Hybrid reasoning bonus button
+        st.markdown("<div class='section-label'>Hybrid Reasoning (Bonus)</div>",
+                    unsafe_allow_html=True)
+        if st.button("🧠 Run Prolog inference on graph", use_container_width=True):
+            ask_bot("run hybrid reasoning")
+            st.rerun()
+
+        st.markdown("---")
+
+        # Manage chat
         st.markdown("<div class='section-label'>Manage chat</div>",
                     unsafe_allow_html=True)
         if st.button("Clear chat", use_container_width=True):
@@ -274,15 +316,28 @@ def render_sidebar(assistant_avatar, overview):
 
         with st.expander("What this bot can do"):
             st.markdown(
-                "**A3 — Neo4j Graph:**\n"
-                "- Type `add person` to add a member\n"
-                "- Data stored as nodes + edges in Neo4j\n"
-                "- No Prolog file — graph IS the knowledge base\n\n"
-                "**Query once added:**\n"
+                "**Add data:**\n"
+                "- `add person` → guided 9-step data entry\n"
+                "- Data stored as Person nodes + edges in Neo4j\n\n"
+                "**Query family:**\n"
                 "- Relationships: father, mother, sibling, uncle, cousin\n"
                 "- Urdu: chacha, phoophi, maamu, khala, dada, nani\n"
                 "- Recursive: ancestor, descendant, blood_relative\n"
-                "- Properties: dob, occupation, city, religion"
+                "- Properties: dob, occupation, city, religion\n\n"
+                "**Graph analysis:**\n"
+                "- `show graph statistics`\n"
+                "- `what relationship types exist`\n"
+                "- `who has the most connections`\n"
+                "- `show data completeness`\n\n"
+                "**Inference & discovery:**\n"
+                "- `what do Ali and Asad have in common`\n"
+                "- `discover hidden relationships of Ali`\n"
+                "- `recommend connections for Ali`\n"
+                "- `how are Ali and Asad connected`\n\n"
+                "**Hybrid reasoning (bonus):**\n"
+                "- `run hybrid reasoning`\n"
+                "  Exports Neo4j → Prolog facts → runs inference → "
+                "writes INFERRED_* relationships back to Neo4j"
             )
         st.caption("Add your photo as assets/profile.png and push to GitHub.")
 
@@ -297,11 +352,10 @@ def render_header(assistant_avatar, suggested_queries):
             <div>
                 <span class="pill">add person</span>
                 <span class="pill">father</span>
-                <span class="pill">mother</span>
-                <span class="pill">siblings</span>
                 <span class="pill">ancestor</span>
-                <span class="pill">occupation</span>
-                <span class="pill">city</span>
+                <span class="pill">graph stats</span>
+                <span class="pill">inference</span>
+                <span class="pill">hybrid</span>
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -369,7 +423,7 @@ def main():
     if st.session_state.get("_collecting", False):
         placeholder = "Type your answer and press Enter ↵"
     else:
-        placeholder = "Type 'add person' to add a member, or ask a question..."
+        placeholder = "Ask a question or type 'add person' to start adding..."
 
     prompt = st.chat_input(placeholder)
     if prompt:

@@ -1,0 +1,181 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<aiml version="1.0.1" encoding="UTF-8">
+
+<!-- =========================================================
+     GRAPH STATISTICS PATTERNS — Priority 1
+     ========================================================= -->
+<category>
+  <pattern>SHOW GRAPH STATISTICS</pattern>
+  <template>Fetching graph structure statistics from Neo4j.</template>
+</category>
+<category><pattern>GRAPH STATISTICS</pattern>
+  <template><srai>SHOW GRAPH STATISTICS</srai></template></category>
+<category><pattern>GRAPH STATS</pattern>
+  <template><srai>SHOW GRAPH STATISTICS</srai></template></category>
+<category><pattern>SHOW GRAPH STATS</pattern>
+  <template><srai>SHOW GRAPH STATISTICS</srai></template></category>
+<category><pattern>ANALYZE THE GRAPH</pattern>
+  <template><srai>SHOW GRAPH STATISTICS</srai></template></category>
+<category><pattern>ANALYZE GRAPH</pattern>
+  <template><srai>SHOW GRAPH STATISTICS</srai></template></category>
+<category><pattern>GRAPH ANALYSIS</pattern>
+  <template><srai>SHOW GRAPH STATISTICS</srai></template></category>
+
+<!-- =========================================================
+     NODE LABELS / RELATIONSHIP TYPES PATTERNS — Priority 1
+     ========================================================= -->
+<category>
+  <pattern>WHAT NODE LABELS EXIST</pattern>
+  <template>Checking node labels used in the graph.</template>
+</category>
+<category><pattern>WHAT LABELS EXIST</pattern>
+  <template><srai>WHAT NODE LABELS EXIST</srai></template></category>
+<category><pattern>SHOW NODE LABELS</pattern>
+  <template><srai>WHAT NODE LABELS EXIST</srai></template></category>
+<category><pattern>SHOW LABELS</pattern>
+  <template><srai>WHAT NODE LABELS EXIST</srai></template></category>
+
+<category>
+  <pattern>WHAT RELATIONSHIP TYPES EXIST</pattern>
+  <template>Checking relationship types used in the graph.</template>
+</category>
+<category><pattern>SHOW RELATIONSHIP TYPES</pattern>
+  <template><srai>WHAT RELATIONSHIP TYPES EXIST</srai></template></category>
+<category><pattern>RELATIONSHIP BREAKDOWN</pattern>
+  <template><srai>WHAT RELATIONSHIP TYPES EXIST</srai></template></category>
+<category><pattern>RELATIONSHIP TYPES</pattern>
+  <template><srai>WHAT RELATIONSHIP TYPES EXIST</srai></template></category>
+
+<!-- =========================================================
+     MOST CONNECTED PATTERNS — Priority 1
+     ========================================================= -->
+<category>
+  <pattern>WHO HAS THE MOST CONNECTIONS</pattern>
+  <template>Finding the most connected person in the graph.</template>
+</category>
+<category><pattern>MOST CONNECTED PERSON</pattern>
+  <template><srai>WHO HAS THE MOST CONNECTIONS</srai></template></category>
+<category><pattern>WHO IS MOST CONNECTED</pattern>
+  <template><srai>WHO HAS THE MOST CONNECTIONS</srai></template></category>
+<category><pattern>MOST CONNECTED</pattern>
+  <template><srai>WHO HAS THE MOST CONNECTIONS</srai></template></category>
+
+<!-- =========================================================
+     DATA COMPLETENESS PATTERNS — Priority 1
+     ========================================================= -->
+<category>
+  <pattern>SHOW DATA COMPLETENESS</pattern>
+  <template>Checking data completeness across all people.</template>
+</category>
+<category><pattern>DATA QUALITY REPORT</pattern>
+  <template><srai>SHOW DATA COMPLETENESS</srai></template></category>
+<category><pattern>DATA COMPLETENESS</pattern>
+  <template><srai>SHOW DATA COMPLETENESS</srai></template></category>
+
+<!-- =========================================================
+     MUTUAL CONNECTIONS PATTERNS — Priority 2
+     ========================================================= -->
+<category>
+  <pattern>WHAT DO * AND * HAVE IN COMMON</pattern>
+  <template>Checking mutual connections between <star/> and <star index="2"/>.</template>
+</category>
+<category>
+  <pattern>WHAT DOES * AND * HAVE IN COMMON</pattern>
+  <template><srai>WHAT DO <star/> AND <star index="2"/> HAVE IN COMMON</srai></template>
+</category>
+<category>
+  <pattern>MUTUAL CONNECTIONS OF * AND *</pattern>
+  <template><srai>WHAT DO <star/> AND <star index="2"/> HAVE IN COMMON</srai></template>
+</category>
+<category>
+  <pattern>COMMON RELATIVES OF * AND *</pattern>
+  <template><srai>WHAT DO <star/> AND <star index="2"/> HAVE IN COMMON</srai></template>
+</category>
+<category>
+  <pattern>WHAT DO * AND * SHARE</pattern>
+  <template><srai>WHAT DO <star/> AND <star index="2"/> HAVE IN COMMON</srai></template>
+</category>
+
+<!-- =========================================================
+     HIDDEN RELATIONSHIPS PATTERNS — Priority 2
+     ========================================================= -->
+<category>
+  <pattern>DISCOVER HIDDEN RELATIONSHIPS OF *</pattern>
+  <template>Discovering hidden relationships for <star/> through graph traversal.</template>
+</category>
+<category>
+  <pattern>HIDDEN RELATIONSHIPS OF *</pattern>
+  <template><srai>DISCOVER HIDDEN RELATIONSHIPS OF <star/></srai></template>
+</category>
+<category>
+  <pattern>FIND HIDDEN CONNECTIONS OF *</pattern>
+  <template><srai>DISCOVER HIDDEN RELATIONSHIPS OF <star/></srai></template>
+</category>
+<category>
+  <pattern>HIDDEN CONNECTIONS OF *</pattern>
+  <template><srai>DISCOVER HIDDEN RELATIONSHIPS OF <star/></srai></template>
+</category>
+
+<!-- =========================================================
+     RECOMMENDATION PATTERNS — Priority 2
+     ========================================================= -->
+<category>
+  <pattern>WHO MIGHT * WANT TO CONNECT WITH</pattern>
+  <template>Generating connection recommendations for <star/>.</template>
+</category>
+<category>
+  <pattern>RECOMMEND CONNECTIONS FOR *</pattern>
+  <template><srai>WHO MIGHT <star/> WANT TO CONNECT WITH</srai></template>
+</category>
+<category>
+  <pattern>SUGGEST CONNECTIONS FOR *</pattern>
+  <template><srai>WHO MIGHT <star/> WANT TO CONNECT WITH</srai></template>
+</category>
+<category>
+  <pattern>CONNECTION RECOMMENDATIONS FOR *</pattern>
+  <template><srai>WHO MIGHT <star/> WANT TO CONNECT WITH</srai></template>
+</category>
+
+<!-- =========================================================
+     CONNECTION STRENGTH / PATH PATTERNS — Priority 2
+     ========================================================= -->
+<category>
+  <pattern>HOW ARE * AND * CONNECTED</pattern>
+  <template>Tracing the connection path between <star/> and <star index="2"/>.</template>
+</category>
+<category>
+  <pattern>WHAT IS THE RELATIONSHIP PATH BETWEEN * AND *</pattern>
+  <template><srai>HOW ARE <star/> AND <star index="2"/> CONNECTED</srai></template>
+</category>
+<category>
+  <pattern>CONNECTION STRENGTH BETWEEN * AND *</pattern>
+  <template><srai>HOW ARE <star/> AND <star index="2"/> CONNECTED</srai></template>
+</category>
+<category>
+  <pattern>PATH BETWEEN * AND *</pattern>
+  <template><srai>HOW ARE <star/> AND <star index="2"/> CONNECTED</srai></template>
+</category>
+
+<!-- =========================================================
+     HYBRID REASONING PATTERNS — Priority 3 (Bonus)
+     ========================================================= -->
+<category>
+  <pattern>RUN HYBRID REASONING</pattern>
+  <template>Running hybrid Neo4j-Prolog reasoning. Exporting graph facts, running Prolog inference, and writing results back to Neo4j.</template>
+</category>
+<category><pattern>HYBRID REASONING</pattern>
+  <template><srai>RUN HYBRID REASONING</srai></template></category>
+<category><pattern>RUN PROLOG INFERENCE</pattern>
+  <template><srai>RUN HYBRID REASONING</srai></template></category>
+<category><pattern>PROLOG INFERENCE</pattern>
+  <template><srai>RUN HYBRID REASONING</srai></template></category>
+<category><pattern>INFER NEW RELATIONSHIPS</pattern>
+  <template><srai>RUN HYBRID REASONING</srai></template></category>
+<category><pattern>DISCOVER INFERRED RELATIONSHIPS</pattern>
+  <template><srai>RUN HYBRID REASONING</srai></template></category>
+<category><pattern>NEO4J PROLOG</pattern>
+  <template><srai>RUN HYBRID REASONING</srai></template></category>
+<category><pattern>PROLOG ON GRAPH</pattern>
+  <template><srai>RUN HYBRID REASONING</srai></template></category>
+
+</aiml>

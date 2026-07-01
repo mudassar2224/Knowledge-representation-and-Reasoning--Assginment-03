@@ -1,12 +1,10 @@
 # chatbot.py
-# A3: Only 2 changes from A2:
-#   1. Import neo4j_engine instead of prolog_engine
-#   2. _handle_facts_ready() calls graph_builder instead of fact_builder
+# A3 Complete: Neo4j + Graph Analysis + Inference + Hybrid Reasoning (Bonus)
 
 import re
 
 from aiml_bot import get_aiml_response
-from neo4j_engine import query, query_yes_no          # ← CHANGED (was prolog_engine)
+from neo4j_engine import query, query_yes_no
 from utils import (
     KNOWN_NAMES, PROPERTY_RELATIONS, RELATION_MAP, RELATION_NAMES,
     capitalize_name, clean_text, extract_names, find_relation,
@@ -127,12 +125,14 @@ def handle_input(user_input: str) -> str:
 
     cleaned = clean_text(user_input)
 
+    # ── Cancel collection ────────────────────────────────────────────────────
     if _collecting and cleaned in {"cancel", "stop", "exit"}:
         _collecting = False
         _stage = 0
         _data = {}
         return "Data collection cancelled. The graph was not modified."
 
+    # ── Add person during collection → re-show current prompt ───────────────
     if _collecting and (cleaned in _ADD_TRIGGERS or bool(_ADD_RE.search(cleaned))):
         return (
             "You are already adding a member. "
@@ -140,32 +140,45 @@ def handle_input(user_input: str) -> str:
             + _prompt(_stage)
         )
 
+    # ── Start new collection ─────────────────────────────────────────────────
     if not _collecting and (cleaned in _ADD_TRIGGERS or bool(_ADD_RE.search(cleaned))):
         _collecting = True
         _stage = 1
         _data = {}
         return "Starting data collection for a new family member.\n\n" + _prompt(1)
 
+    # ── In-progress collection ───────────────────────────────────────────────
     if _collecting:
         return _process_collection_step(user_input)
 
+    # ── Greetings / Help / Farewell ──────────────────────────────────────────
     if _is_aiml_intent(user_input):
         response = get_aiml_response(user_input)
         if response:
             return response
 
+    # ── Priority 1: Graph Analysis ───────────────────────────────────────────
+    analysis_answer = _answer_graph_analysis(cleaned)
+    if analysis_answer:
+        return analysis_answer
+
+    # ── Priority 2: Inference and Discovery ─────────────────────────────────
+    inference_answer = _answer_inference(cleaned)
+    if inference_answer:
+        return inference_answer
+
+    # ── Priority 3 (Bonus): Hybrid Neo4j-Prolog Reasoning ───────────────────
+    hybrid_answer = _answer_hybrid_reasoning(cleaned)
+    if hybrid_answer:
+        return hybrid_answer
+
+    # ── Normal family query dispatch ─────────────────────────────────────────
     return _prolog_dispatch(user_input)
 
 
-# ── A3: Updated _handle_facts_ready ──────────────────────────────────────────
-
 def _handle_facts_ready() -> str:
-    """
-    Called when all 9 collection steps are done.
-    Saves the collected data to Neo4j (replaces writing to .pl file).
-    """
-    from graph_builder import save_to_graph, person_exists   # ← CHANGED
-    from neo4j_engine import reload_graph                     # ← CHANGED
+    from graph_builder import save_to_graph, person_exists
+    from neo4j_engine import reload_graph
 
     data = _data.copy()
     name = data.get("name", "").strip().lower()
@@ -179,14 +192,12 @@ def _handle_facts_ready() -> str:
             f"Try: tell me about {capitalize_name(name)}"
         )
 
-    # Save to Neo4j graph (replaces fact_builder + family_kb.pl)
-    success, message = save_to_graph(data)                    # ← CHANGED
+    success, message = save_to_graph(data)
 
     if not success:
         return f"Error: {message}. Please try 'add person' again."
 
-    # Reload graph to sync KNOWN_NAMES
-    reload_graph()                                             # ← CHANGED
+    reload_graph()
 
     city       = data.get("city",       "unknown").lower()
     occupation = data.get("occupation", "unknown").lower()
@@ -204,7 +215,95 @@ def _handle_facts_ready() -> str:
     )
 
 
-# ── All A1 functions below — completely unchanged ─────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════
+# PRIORITY 1 — GRAPH ANALYSIS
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _answer_graph_analysis(text: str):
+    try:
+        from graph_analysis import (
+            format_graph_stats_response,
+            format_relationship_breakdown_response,
+            format_most_connected_response,
+            format_completeness_response,
+        )
+    except ImportError:
+        return None
+
+    if re.search(r"\b(graph statistics|graph stats|analyze.*graph|graph analysis)\b", text):
+        return format_graph_stats_response()
+
+    if re.search(r"\b(node labels?|labels? exist|show.*labels?)\b", text):
+        return format_graph_stats_response()
+
+    if re.search(r"\b(relationship types?|relationship breakdown|show.*relationship types?)\b", text):
+        return format_relationship_breakdown_response()
+
+    if re.search(r"\b(most connected|who has the most connections|most connections)\b", text):
+        return format_most_connected_response()
+
+    if re.search(r"\b(data completeness|data quality|completeness report)\b", text):
+        return format_completeness_response()
+
+    return None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PRIORITY 2 — INFERENCE AND DISCOVERY
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _answer_inference(text: str):
+    try:
+        from graph_inference import (
+            format_mutual_connections_response,
+            format_hidden_relationships_response,
+            format_recommendations_response,
+            format_connection_strength_response,
+        )
+    except ImportError:
+        return None
+
+    names = extract_names(text)
+
+    if re.search(r"\b(have in common|mutual connections?|common relatives?)\b", text) and len(names) >= 2:
+        return format_mutual_connections_response(names[0], names[1])
+
+    if re.search(r"\b(hidden relationships?|hidden connections?|discover.*hidden)\b", text) and len(names) >= 1:
+        return format_hidden_relationships_response(names[0])
+
+    if re.search(r"\b(recommend|suggest).{0,20}connect|connect with\b", text) and len(names) >= 1:
+        return format_recommendations_response(names[0])
+
+    if re.search(r"\b(how.*connected|connection strength|relationship path|path between)\b", text) and len(names) >= 2:
+        return format_connection_strength_response(names[0], names[1])
+
+    return None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PRIORITY 3 (BONUS) — HYBRID NEO4J-PROLOG REASONING
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _answer_hybrid_reasoning(text: str):
+    if re.search(
+        r"\b(run hybrid reasoning|hybrid reasoning|prolog inference|"
+        r"infer new relationships?|discover inferred relationships?|"
+        r"run prolog|neo4j prolog|prolog on graph)\b",
+        text,
+    ):
+        try:
+            from hybrid_reasoning import format_hybrid_reasoning_response
+            return format_hybrid_reasoning_response()
+        except ImportError:
+            return "Hybrid reasoning module not found. Make sure hybrid_reasoning.py is in the project folder."
+        except Exception as e:
+            return f"Hybrid reasoning error: {e}. Make sure pytholog is installed (pip install pytholog)."
+    return None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STANDARD FAMILY QUERY DISPATCH (A1/A2 — UNCHANGED)
+# ═══════════════════════════════════════════════════════════════════════════
 
 def _is_aiml_intent(text):
     cleaned = clean_text(text)
@@ -233,6 +332,7 @@ def _prolog_dispatch(text):
     if not cleaned:
         return "Please type a question."
     names = extract_names(cleaned)
+
     yes_no = _answer_yes_no(cleaned, names)
     if yes_no:
         return yes_no
@@ -558,12 +658,24 @@ def _singular(word):
 
 def _fallback():
     return (
-        "I can answer family knowledge-graph questions. Try:\n"
-        "  add person                 ← add a new family member\n"
-        "  who is Ali's father?\n"
+        "I can answer family knowledge-graph questions. Try:\n\n"
+        "  add person                     ← add a new family member\n"
         "  tell me about Ali\n"
+        "  who is Ali's father?\n"
         "  is Shakeel an ancestor of Zain?\n"
         "  who lives in Lahore?\n"
         "  list all members\n\n"
+        "Graph analysis:\n"
+        "  show graph statistics\n"
+        "  what relationship types exist\n"
+        "  who has the most connections\n"
+        "  show data completeness\n\n"
+        "Inference and discovery:\n"
+        "  what do Ali and Asad have in common\n"
+        "  discover hidden relationships of Ali\n"
+        "  recommend connections for Ali\n"
+        "  how are Ali and Asad connected\n\n"
+        "Hybrid reasoning (bonus):\n"
+        "  run hybrid reasoning\n\n"
         "The graph is empty until you add people via 'add person'."
     )
