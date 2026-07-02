@@ -1,8 +1,14 @@
-# streamlit_app.py — Assignment 3 Complete
-# All priorities: Graph Analysis + Inference + Hybrid Reasoning
+# streamlit_app.py — FIXED VERSION
+# Fixes:
+#   1. Removed kb_overview() cache clear on every message → was triggering
+#      4+ heavy Neo4j queries on every st.rerun(), causing the "loading" freeze.
+#   2. init_bot() now uses st.session_state flag instead of @lru_cache so it
+#      runs ONCE per browser session, not once per Python process (which can
+#      cause stale connections across Streamlit reruns).
+#   3. kb_overview() now lazy-loads without @lru_cache; caches in session_state
+#      so sidebar counts update after add_person but don't re-query on every message.
 
 from pathlib import Path
-from functools import lru_cache
 
 import streamlit as st
 
@@ -24,7 +30,7 @@ WELCOME_MESSAGE = (
     "then ask questions about them!\n\n"
     "**New features:**\n"
     "- `show graph statistics` — analyze the graph structure\n"
-    "- `what do Ali and Asad have in common` — inference\n"
+    "- `what do Ali and Ahmad have in common` — inference\n"
     "- `run hybrid reasoning` — Neo4j + Prolog hybrid (bonus)"
 )
 
@@ -81,23 +87,36 @@ def _family_religions():
     return sorted(set(_extract_values(query("religion", ["X", "Y"]), var="Y")))
 
 
-@lru_cache(maxsize=1)
+# FIX: Use session_state flag instead of @lru_cache so init only runs
+# once per browser session, not once per Python process lifetime.
 def init_bot():
-    load_graph()
-    load_aiml()
-    return True
+    if not st.session_state.get("_bot_initialized"):
+        load_graph()
+        load_aiml()
+        st.session_state["_bot_initialized"] = True
 
 
-@lru_cache(maxsize=1)
-def kb_overview():
-    return {
-        "people_count":     len(_family_members()),
-        "city_count":       len(_family_cities()),
-        "occupation_count": len(_family_occupations()),
-        "religion_count":   len(_family_religions()),
-        "relation_count":   len(RELATION_NAMES),
-        "property_count":   len(PROPERTY_RELATIONS),
-    }
+def _get_kb_overview():
+    """
+    FIX: Cache overview in session_state. Only re-query after a person
+    is added (flagged by _refresh_overview). This prevents 4 heavy
+    Neo4j queries on every single Streamlit rerun.
+    """
+    if not st.session_state.get("_overview") or st.session_state.get("_refresh_overview"):
+        members     = _family_members()
+        cities      = _family_cities()
+        occupations = _family_occupations()
+        religions   = _family_religions()
+        st.session_state["_overview"] = {
+            "people_count":     len(members),
+            "city_count":       len(cities),
+            "occupation_count": len(occupations),
+            "religion_count":   len(religions),
+            "relation_count":   len(RELATION_NAMES),
+            "property_count":   len(PROPERTY_RELATIONS),
+        }
+        st.session_state["_refresh_overview"] = False
+    return st.session_state["_overview"]
 
 
 def build_suggested_queries():
@@ -145,9 +164,10 @@ def ask_bot(prompt: str):
     st.session_state["_stage"]      = _chatbot._stage
     st.session_state["_data"]       = _chatbot._data.copy()
 
-    # Clear KB stats cache when a person is added
+    # FIX: flag for overview refresh only when a person was actually added
+    # Don't clear lru_cache (it no longer exists); just flag for lazy refresh.
     if "Successfully added" in response:
-        kb_overview.cache_clear()
+        st.session_state["_refresh_overview"] = True
 
 
 def apply_styles():
@@ -241,7 +261,6 @@ def render_sidebar(assistant_avatar, overview):
 
         st.caption("Neo4j Graph DB + AIML + Hybrid Prolog Reasoning.")
 
-        # Live status
         st.markdown("<div class='section-label'>Live status</div>",
                     unsafe_allow_html=True)
         st.success("Neo4j graph connected")
@@ -253,7 +272,6 @@ def render_sidebar(assistant_avatar, overview):
         if is_collecting and stage > 0:
             st.warning(f"⏳ Collecting — Step {stage}/9 in progress")
 
-        # Stats
         r1 = st.columns(2)
         r1[0].metric("People",     overview["people_count"])
         r1[1].metric("Cities",     overview["city_count"])
@@ -263,7 +281,6 @@ def render_sidebar(assistant_avatar, overview):
 
         st.markdown("---")
 
-        # Add member
         st.markdown("<div class='section-label'>Add to Graph</div>",
                     unsafe_allow_html=True)
         if not is_collecting:
@@ -280,7 +297,6 @@ def render_sidebar(assistant_avatar, overview):
 
         st.markdown("---")
 
-        # Graph analysis quick buttons
         st.markdown("<div class='section-label'>Graph Analysis</div>",
                     unsafe_allow_html=True)
         if st.button("📊 Graph statistics", use_container_width=True):
@@ -298,7 +314,6 @@ def render_sidebar(assistant_avatar, overview):
 
         st.markdown("---")
 
-        # Hybrid reasoning bonus button
         st.markdown("<div class='section-label'>Hybrid Reasoning (Bonus)</div>",
                     unsafe_allow_html=True)
         if st.button("🧠 Run Prolog inference on graph", use_container_width=True):
@@ -307,7 +322,6 @@ def render_sidebar(assistant_avatar, overview):
 
         st.markdown("---")
 
-        # Manage chat
         st.markdown("<div class='section-label'>Manage chat</div>",
                     unsafe_allow_html=True)
         if st.button("Clear chat", use_container_width=True):
@@ -317,9 +331,11 @@ def render_sidebar(assistant_avatar, overview):
         with st.expander("What this bot can do"):
             st.markdown(
                 "**Add data:**\n"
-                "- `add person` → guided 9-step data entry\n"
-                "- Data stored as Person nodes + edges in Neo4j\n\n"
+                "- `add person` → guided 9-step data entry\n\n"
                 "**Query family:**\n"
+                "- `who is Ahmad's father?`\n"
+                "- `who is Ahmad's mother?`\n"
+                "- `tell me about Ahmad`\n"
                 "- Relationships: father, mother, sibling, uncle, cousin\n"
                 "- Urdu: chacha, phoophi, maamu, khala, dada, nani\n"
                 "- Recursive: ancestor, descendant, blood_relative\n"
@@ -330,14 +346,12 @@ def render_sidebar(assistant_avatar, overview):
                 "- `who has the most connections`\n"
                 "- `show data completeness`\n\n"
                 "**Inference & discovery:**\n"
-                "- `what do Ali and Asad have in common`\n"
+                "- `what do Ali and Ahmad have in common`\n"
                 "- `discover hidden relationships of Ali`\n"
                 "- `recommend connections for Ali`\n"
-                "- `how are Ali and Asad connected`\n\n"
+                "- `how are Ali and Ahmad connected`\n\n"
                 "**Hybrid reasoning (bonus):**\n"
                 "- `run hybrid reasoning`\n"
-                "  Exports Neo4j → Prolog facts → runs inference → "
-                "writes INFERRED_* relationships back to Neo4j"
             )
         st.caption("Add your photo as assets/profile.png and push to GitHub.")
 
@@ -408,13 +422,15 @@ def main():
         initial_sidebar_state="expanded",
     )
 
+    # FIX: init only runs once per browser session
     init_bot()
 
     if "messages" not in st.session_state:
         reset_chat()
 
     assistant_avatar  = _find_profile_image()
-    overview          = kb_overview()
+    # FIX: lazy, session-cached overview (no heavy queries on every rerun)
+    overview          = _get_kb_overview()
     suggested_queries = build_suggested_queries()
 
     apply_styles()

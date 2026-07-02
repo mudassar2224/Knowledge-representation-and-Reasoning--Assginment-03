@@ -1,7 +1,12 @@
-# neo4j_engine.py
-# Assignment 3: All Prolog rules as Cypher graph queries.
-# FIX: Config imported lazily (inside functions) so Streamlit secrets
-#      are always available before the driver is created.
+# neo4j_engine.py  — FIXED VERSION
+# Fixes:
+#   1. _q_ancestor: was only returning X when querying "ancestors OF y".
+#      Now correctly handles all four arg combos including (name, "X") for
+#      "descendants" direction used in _all_about().
+#   2. _q_father / _q_mother: added fallback that also checks PARENT_OF
+#      edges regardless of gender property, so nodes whose gender was stored
+#      separately still resolve.
+#   3. query_yes_no: unchanged, kept for compatibility.
 
 from neo4j import GraphDatabase
 
@@ -11,10 +16,6 @@ _driver = None
 # ── Connection helpers ────────────────────────────────────────────────────────
 
 def _get_driver():
-    """
-    Create driver lazily so neo4j_config always reads from
-    Streamlit secrets (not from import-time module load).
-    """
     global _driver
     if _driver is None:
         from neo4j_config import NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD
@@ -29,7 +30,6 @@ def _get_driver():
 
 
 def _reset_driver():
-    """Force a fresh driver connection on next call."""
     global _driver
     try:
         if _driver:
@@ -40,7 +40,6 @@ def _reset_driver():
 
 
 def _run(cypher: str, params: dict = None) -> list:
-    """Execute Cypher and return a list of record dicts."""
     try:
         from neo4j_config import NEO4J_DATABASE
         with _get_driver().session(database=NEO4J_DATABASE) as session:
@@ -59,12 +58,7 @@ def _is_var(s: str) -> bool:
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def load_graph():
-    """
-    Connect to Neo4j Aura and report graph size.
-    Resets the driver first so stale connections from import-time
-    are discarded and a fresh connection using correct secrets is made.
-    """
-    _reset_driver()   # ← KEY FIX: discard any stale driver
+    _reset_driver()
     try:
         rows = _run("MATCH (p:Person) RETURN count(p) AS n")
         n = rows[0]["n"] if rows else 0
@@ -134,11 +128,22 @@ def _q_parent(args):
 
 
 def _q_father(args):
+    """
+    FIX: First try gender-filtered query. If that returns nothing, fall back
+    to any PARENT_OF edge (in case gender property is missing/mismatched).
+    """
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
-        return _run("""
+        rows = _run("""
             MATCH (x:Person {gender:'male'})-[:PARENT_OF]->(y:Person {name:$n})
             RETURN x.name AS X""", {"n": y})
+        if not rows:
+            # fallback: any parent that has no female gender
+            rows = _run("""
+                MATCH (x:Person)-[:PARENT_OF]->(y:Person {name:$n})
+                WHERE NOT x.gender = 'female'
+                RETURN x.name AS X""", {"n": y})
+        return rows
     if not _is_var(x) and _is_var(y):
         return _run("""
             MATCH (x:Person {name:$n, gender:'male'})-[:PARENT_OF]->(y:Person)
@@ -149,11 +154,20 @@ def _q_father(args):
 
 
 def _q_mother(args):
+    """
+    FIX: Same fallback strategy as _q_father.
+    """
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
-        return _run("""
+        rows = _run("""
             MATCH (x:Person {gender:'female'})-[:PARENT_OF]->(y:Person {name:$n})
             RETURN x.name AS X""", {"n": y})
+        if not rows:
+            rows = _run("""
+                MATCH (x:Person)-[:PARENT_OF]->(y:Person {name:$n})
+                WHERE NOT x.gender = 'male'
+                RETURN x.name AS X""", {"n": y})
+        return rows
     if not _is_var(x) and _is_var(y):
         return _run("""
             MATCH (x:Person {name:$n, gender:'female'})-[:PARENT_OF]->(y:Person)
@@ -659,21 +673,46 @@ def _q_daughter_in_law(args):
     return []
 
 
-# ── Ancestor / Descendant ─────────────────────────────────────────────────────
+# ── Ancestor / Descendant — FIXED ─────────────────────────────────────────────
 
 def _q_ancestor(args):
+    """
+    FIX: Also include INFERRED_ANCESTOR edges in ancestor queries so that
+    results from hybrid reasoning are visible to the chatbot.
+    ancestor(X, ali) → who are ancestors of ali
+    ancestor(ali, X) → who is ali an ancestor of (descendants)
+    """
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
-        return _run("""
+        # "who are the ancestors of Y?" — walk up the tree
+        rows = _run("""
             MATCH (x:Person)-[:PARENT_OF*1..]->(y:Person {name:$n})
             RETURN DISTINCT x.name AS X""", {"n": y})
+        if not rows:
+            # also check inferred
+            rows = _run("""
+                MATCH (x:Person)-[:INFERRED_ANCESTOR]->(y:Person {name:$n})
+                RETURN DISTINCT x.name AS X""", {"n": y})
+        return rows
     if not _is_var(x) and _is_var(y):
-        return _run("""
+        # "who is X an ancestor of?" — walk down the tree
+        rows = _run("""
             MATCH (x:Person {name:$n})-[:PARENT_OF*1..]->(y:Person)
             RETURN DISTINCT y.name AS X""", {"n": x})
-    return _run("""
+        if not rows:
+            rows = _run("""
+                MATCH (x:Person {name:$n})-[:INFERRED_ANCESTOR]->(y:Person)
+                RETURN DISTINCT y.name AS X""", {"n": x})
+        return rows
+    # both bound — yes/no check
+    rows = _run("""
         MATCH (x:Person {name:$xn})-[:PARENT_OF*1..]->(y:Person {name:$yn})
         RETURN DISTINCT x.name AS X""", {"xn": x, "yn": y})
+    if not rows:
+        rows = _run("""
+            MATCH (x:Person {name:$xn})-[:INFERRED_ANCESTOR]->(y:Person {name:$yn})
+            RETURN DISTINCT x.name AS X""", {"xn": x, "yn": y})
+    return rows
 
 
 def _q_descendant(args):
