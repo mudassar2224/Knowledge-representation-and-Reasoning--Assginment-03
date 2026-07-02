@@ -1,19 +1,16 @@
-# neo4j_engine.py  — FIXED VERSION
-# Fixes:
-#   1. _q_ancestor: was only returning X when querying "ancestors OF y".
-#      Now correctly handles all four arg combos including (name, "X") for
-#      "descendants" direction used in _all_about().
-#   2. _q_father / _q_mother: added fallback that also checks PARENT_OF
-#      edges regardless of gender property, so nodes whose gender was stored
-#      separately still resolve.
-#   3. query_yes_no: unchanged, kept for compatibility.
+# neo4j_engine.py
+# Assignment 3: All Prolog rules as Cypher graph queries.
+# FIX: father/mother/son/daughter no longer require gender to be set
+#      on nodes that were auto-created as stubs by graph_builder.py.
+#      Gender is used when present; PARENT_OF direction is authoritative.
 
+import time
 from neo4j import GraphDatabase
 
 _driver = None
+_MAX_RETRIES = 3
+_RETRY_DELAY = 2
 
-
-# ── Connection helpers ────────────────────────────────────────────────────────
 
 def _get_driver():
     global _driver
@@ -24,7 +21,7 @@ def _get_driver():
             auth=(NEO4J_USERNAME, NEO4J_PASSWORD),
             max_connection_lifetime=200,
             max_connection_pool_size=10,
-            connection_acquisition_timeout=30,
+            connection_acquisition_timeout=60,
         )
     return _driver
 
@@ -40,14 +37,21 @@ def _reset_driver():
 
 
 def _run(cypher: str, params: dict = None) -> list:
-    try:
-        from neo4j_config import NEO4J_DATABASE
-        with _get_driver().session(database=NEO4J_DATABASE) as session:
-            result = session.run(cypher, params or {})
-            return [dict(r) for r in result]
-    except Exception as e:
-        print(f"[Neo4j ERROR] {e}")
-        return []
+    from neo4j_config import NEO4J_DATABASE
+    last_error = None
+    for attempt in range(1, _MAX_RETRIES + 1):
+        try:
+            with _get_driver().session(database=NEO4J_DATABASE) as session:
+                result = session.run(cypher, params or {})
+                return [dict(r) for r in result]
+        except Exception as e:
+            last_error = e
+            if attempt == _MAX_RETRIES:
+                print(f"[Neo4j ERROR] {last_error}")
+            else:
+                _reset_driver()
+                time.sleep(_RETRY_DELAY)
+    return []
 
 
 def _is_var(s: str) -> bool:
@@ -55,7 +59,7 @@ def _is_var(s: str) -> bool:
     return bool(s) and s[0].isupper()
 
 
-# ── Public API ────────────────────────────────────────────────────────────────
+# ── Connection helpers ────────────────────────────────────────────────────────
 
 def load_graph():
     _reset_driver()
@@ -70,7 +74,6 @@ def load_graph():
 
 
 def reload_graph():
-    """Sync KNOWN_NAMES from the graph after a person is added."""
     import utils
     people = get_all_people()
     utils.KNOWN_NAMES.update(people)
@@ -83,22 +86,25 @@ def get_all_people() -> set:
 
 
 def person_exists_in_graph(name: str) -> bool:
+    name = str(name).lower().strip()
+    if not name:
+        return False
     rows = _run(
-        "MATCH (p:Person {name:$name}) RETURN p.name",
-        {"name": name.lower()}
+        "MATCH (p:Person) WHERE toLower(p.name) = $name RETURN p.name LIMIT 1",
+        {"name": name}
     )
     return len(rows) > 0
 
 
-# ── Gender ────────────────────────────────────────────────────────────────────
+# ── Gender (unary) ────────────────────────────────────────────────────────────
 
 def _q_male(args):
     x = args[0]
     if _is_var(x):
         return _run("MATCH (p:Person {gender:'male'}) RETURN p.name AS X")
     return _run(
-        "MATCH (p:Person {name:$n}) WHERE p.gender='male' RETURN p.name AS X",
-        {"n": x})
+        "MATCH (p:Person) WHERE toLower(p.name)=$n AND p.gender='male' RETURN p.name AS X",
+        {"n": x.lower()})
 
 
 def _q_female(args):
@@ -106,8 +112,8 @@ def _q_female(args):
     if _is_var(x):
         return _run("MATCH (p:Person {gender:'female'}) RETURN p.name AS X")
     return _run(
-        "MATCH (p:Person {name:$n}) WHERE p.gender='female' RETURN p.name AS X",
-        {"n": x})
+        "MATCH (p:Person) WHERE toLower(p.name)=$n AND p.gender='female' RETURN p.name AS X",
+        {"n": x.lower()})
 
 
 # ── Parent / Child ────────────────────────────────────────────────────────────
@@ -115,103 +121,138 @@ def _q_female(args):
 def _q_parent(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
-        return _run(
-            "MATCH (x:Person)-[:PARENT_OF]->(y:Person {name:$n}) RETURN x.name AS X",
-            {"n": y})
+        return _run("""
+            MATCH (x:Person)-[:PARENT_OF]->(y:Person)
+            WHERE toLower(y.name)=$n
+            RETURN x.name AS X""", {"n": y.lower()})
     if not _is_var(x) and _is_var(y):
-        return _run(
-            "MATCH (x:Person {name:$n})-[:PARENT_OF]->(y:Person) RETURN y.name AS X",
-            {"n": x})
-    return _run(
-        "MATCH (x:Person {name:$xn})-[:PARENT_OF]->(y:Person {name:$yn}) RETURN x.name AS X",
-        {"xn": x, "yn": y})
+        return _run("""
+            MATCH (x:Person)-[:PARENT_OF]->(y:Person)
+            WHERE toLower(x.name)=$n
+            RETURN y.name AS X""", {"n": x.lower()})
+    return _run("""
+        MATCH (x:Person)-[:PARENT_OF]->(y:Person)
+        WHERE toLower(x.name)=$xn AND toLower(y.name)=$yn
+        RETURN x.name AS X""", {"xn": x.lower(), "yn": y.lower()})
 
 
 def _q_father(args):
     """
-    FIX: First try gender-filtered query. If that returns nothing, fall back
-    to any PARENT_OF edge (in case gender property is missing/mismatched).
+    FIX: Father = person who has PARENT_OF edge to child AND gender='male'.
+    If gender is not set on that node, fall back to any PARENT_OF parent
+    that is NOT the mother (i.e. the non-female parent).
+    Strategy: try gender-based first, then fall back to non-female parent.
     """
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         rows = _run("""
-            MATCH (x:Person {gender:'male'})-[:PARENT_OF]->(y:Person {name:$n})
-            RETURN x.name AS X""", {"n": y})
+            MATCH (x:Person)-[:PARENT_OF]->(y:Person)
+            WHERE toLower(y.name)=$n AND x.gender='male'
+            RETURN x.name AS X""", {"n": y.lower()})
         if not rows:
-            # fallback: any parent that has no female gender
+            # Fallback: parent who is not female
             rows = _run("""
-                MATCH (x:Person)-[:PARENT_OF]->(y:Person {name:$n})
-                WHERE NOT x.gender = 'female'
-                RETURN x.name AS X""", {"n": y})
+                MATCH (x:Person)-[:PARENT_OF]->(y:Person)
+                WHERE toLower(y.name)=$n
+                  AND (x.gender IS NULL OR x.gender <> 'female')
+                RETURN x.name AS X LIMIT 1""", {"n": y.lower()})
         return rows
     if not _is_var(x) and _is_var(y):
         return _run("""
-            MATCH (x:Person {name:$n, gender:'male'})-[:PARENT_OF]->(y:Person)
-            RETURN y.name AS X""", {"n": x})
+            MATCH (x:Person)-[:PARENT_OF]->(y:Person)
+            WHERE toLower(x.name)=$n AND x.gender='male'
+            RETURN y.name AS X""", {"n": x.lower()})
     return _run("""
-        MATCH (x:Person {name:$xn, gender:'male'})-[:PARENT_OF]->(y:Person {name:$yn})
-        RETURN x.name AS X""", {"xn": x, "yn": y})
+        MATCH (x:Person)-[:PARENT_OF]->(y:Person)
+        WHERE toLower(x.name)=$xn AND toLower(y.name)=$yn
+          AND x.gender='male'
+        RETURN x.name AS X""", {"xn": x.lower(), "yn": y.lower()})
 
 
 def _q_mother(args):
     """
-    FIX: Same fallback strategy as _q_father.
+    FIX: Mother = person who has PARENT_OF edge to child AND gender='female'.
+    Falls back to non-male parent if gender is not set.
     """
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         rows = _run("""
-            MATCH (x:Person {gender:'female'})-[:PARENT_OF]->(y:Person {name:$n})
-            RETURN x.name AS X""", {"n": y})
+            MATCH (x:Person)-[:PARENT_OF]->(y:Person)
+            WHERE toLower(y.name)=$n AND x.gender='female'
+            RETURN x.name AS X""", {"n": y.lower()})
         if not rows:
             rows = _run("""
-                MATCH (x:Person)-[:PARENT_OF]->(y:Person {name:$n})
-                WHERE NOT x.gender = 'male'
-                RETURN x.name AS X""", {"n": y})
+                MATCH (x:Person)-[:PARENT_OF]->(y:Person)
+                WHERE toLower(y.name)=$n
+                  AND (x.gender IS NULL OR x.gender <> 'male')
+                RETURN x.name AS X LIMIT 1""", {"n": y.lower()})
         return rows
     if not _is_var(x) and _is_var(y):
         return _run("""
-            MATCH (x:Person {name:$n, gender:'female'})-[:PARENT_OF]->(y:Person)
-            RETURN y.name AS X""", {"n": x})
+            MATCH (x:Person)-[:PARENT_OF]->(y:Person)
+            WHERE toLower(x.name)=$n AND x.gender='female'
+            RETURN y.name AS X""", {"n": x.lower()})
     return _run("""
-        MATCH (x:Person {name:$xn, gender:'female'})-[:PARENT_OF]->(y:Person {name:$yn})
-        RETURN x.name AS X""", {"xn": x, "yn": y})
+        MATCH (x:Person)-[:PARENT_OF]->(y:Person)
+        WHERE toLower(x.name)=$xn AND toLower(y.name)=$yn
+          AND x.gender='female'
+        RETURN x.name AS X""", {"xn": x.lower(), "yn": y.lower()})
 
 
 def _q_child(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (y:Person {name:$n})-[:PARENT_OF]->(x:Person)
-            RETURN x.name AS X""", {"n": y})
+            MATCH (y:Person)-[:PARENT_OF]->(x:Person)
+            WHERE toLower(y.name)=$n RETURN x.name AS X""", {"n": y.lower()})
     if not _is_var(x) and _is_var(y):
         return _run("""
-            MATCH (y:Person)-[:PARENT_OF]->(x:Person {name:$n})
-            RETURN y.name AS X""", {"n": x})
+            MATCH (y:Person)-[:PARENT_OF]->(x:Person)
+            WHERE toLower(x.name)=$n RETURN y.name AS X""", {"n": x.lower()})
     return _run("""
-        MATCH (y:Person {name:$yn})-[:PARENT_OF]->(x:Person {name:$xn})
-        RETURN x.name AS X""", {"xn": x, "yn": y})
+        MATCH (y:Person)-[:PARENT_OF]->(x:Person)
+        WHERE toLower(y.name)=$yn AND toLower(x.name)=$xn
+        RETURN x.name AS X""", {"xn": x.lower(), "yn": y.lower()})
 
 
 def _q_son(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
-        return _run("""
-            MATCH (y:Person {name:$n})-[:PARENT_OF]->(x:Person {gender:'male'})
-            RETURN x.name AS X""", {"n": y})
+        rows = _run("""
+            MATCH (y:Person)-[:PARENT_OF]->(x:Person)
+            WHERE toLower(y.name)=$n AND x.gender='male'
+            RETURN x.name AS X""", {"n": y.lower()})
+        if not rows:
+            rows = _run("""
+                MATCH (y:Person)-[:PARENT_OF]->(x:Person)
+                WHERE toLower(y.name)=$n
+                  AND (x.gender IS NULL OR x.gender <> 'female')
+                RETURN x.name AS X""", {"n": y.lower()})
+        return rows
     return _run("""
-        MATCH (y:Person {name:$yn})-[:PARENT_OF]->(x:Person {name:$xn, gender:'male'})
-        RETURN x.name AS X""", {"xn": x, "yn": y})
+        MATCH (y:Person)-[:PARENT_OF]->(x:Person)
+        WHERE toLower(y.name)=$yn AND toLower(x.name)=$xn AND x.gender='male'
+        RETURN x.name AS X""", {"xn": x.lower(), "yn": y.lower()})
 
 
 def _q_daughter(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
-        return _run("""
-            MATCH (y:Person {name:$n})-[:PARENT_OF]->(x:Person {gender:'female'})
-            RETURN x.name AS X""", {"n": y})
+        rows = _run("""
+            MATCH (y:Person)-[:PARENT_OF]->(x:Person)
+            WHERE toLower(y.name)=$n AND x.gender='female'
+            RETURN x.name AS X""", {"n": y.lower()})
+        if not rows:
+            rows = _run("""
+                MATCH (y:Person)-[:PARENT_OF]->(x:Person)
+                WHERE toLower(y.name)=$n
+                  AND (x.gender IS NULL OR x.gender <> 'male')
+                RETURN x.name AS X""", {"n": y.lower()})
+        return rows
     return _run("""
-        MATCH (y:Person {name:$yn})-[:PARENT_OF]->(x:Person {name:$xn, gender:'female'})
-        RETURN x.name AS X""", {"xn": x, "yn": y})
+        MATCH (y:Person)-[:PARENT_OF]->(x:Person)
+        WHERE toLower(y.name)=$yn AND toLower(x.name)=$xn AND x.gender='female'
+        RETURN x.name AS X""", {"xn": x.lower(), "yn": y.lower()})
 
 
 # ── Spouse ────────────────────────────────────────────────────────────────────
@@ -220,37 +261,42 @@ def _q_spouse(args):
     x, y = args[0], args[1]
     if not _is_var(x) and _is_var(y):
         return _run("""
-            MATCH (x:Person {name:$n})-[:MARRIED_TO]-(y:Person)
-            RETURN y.name AS X""", {"n": x})
+            MATCH (x:Person)-[:MARRIED_TO]-(y:Person)
+            WHERE toLower(x.name)=$n RETURN y.name AS X""", {"n": x.lower()})
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (x:Person)-[:MARRIED_TO]-(y:Person {name:$n})
-            RETURN x.name AS X""", {"n": y})
+            MATCH (x:Person)-[:MARRIED_TO]-(y:Person)
+            WHERE toLower(y.name)=$n RETURN x.name AS X""", {"n": y.lower()})
     return _run("""
-        MATCH (x:Person {name:$xn})-[:MARRIED_TO]-(y:Person {name:$yn})
-        RETURN x.name AS X""", {"xn": x, "yn": y})
+        MATCH (x:Person)-[:MARRIED_TO]-(y:Person)
+        WHERE toLower(x.name)=$xn AND toLower(y.name)=$yn
+        RETURN x.name AS X""", {"xn": x.lower(), "yn": y.lower()})
 
 
 def _q_husband(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (x:Person {gender:'male'})-[:MARRIED_TO]-(y:Person {name:$n})
-            RETURN x.name AS X""", {"n": y})
+            MATCH (x:Person)-[:MARRIED_TO]-(y:Person)
+            WHERE toLower(y.name)=$n AND x.gender='male'
+            RETURN x.name AS X""", {"n": y.lower()})
     return _run("""
-        MATCH (x:Person {name:$xn, gender:'male'})-[:MARRIED_TO]-(y:Person {name:$yn})
-        RETURN x.name AS X""", {"xn": x, "yn": y})
+        MATCH (x:Person)-[:MARRIED_TO]-(y:Person)
+        WHERE toLower(x.name)=$xn AND x.gender='male'
+        RETURN x.name AS X""", {"xn": x.lower()})
 
 
 def _q_wife(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (x:Person {gender:'female'})-[:MARRIED_TO]-(y:Person {name:$n})
-            RETURN x.name AS X""", {"n": y})
+            MATCH (x:Person)-[:MARRIED_TO]-(y:Person)
+            WHERE toLower(y.name)=$n AND x.gender='female'
+            RETURN x.name AS X""", {"n": y.lower()})
     return _run("""
-        MATCH (x:Person {name:$xn, gender:'female'})-[:MARRIED_TO]-(y:Person {name:$yn})
-        RETURN x.name AS X""", {"xn": x, "yn": y})
+        MATCH (x:Person)-[:MARRIED_TO]-(y:Person)
+        WHERE toLower(x.name)=$xn AND x.gender='female'
+        RETURN x.name AS X""", {"xn": x.lower()})
 
 
 # ── Siblings ──────────────────────────────────────────────────────────────────
@@ -260,42 +306,46 @@ def _q_sibling(args):
     if _is_var(x) and not _is_var(y):
         return _run("""
             MATCH (p:Person)-[:PARENT_OF]->(x:Person),
-                  (p:Person)-[:PARENT_OF]->(y:Person {name:$n})
-            WHERE x <> y
-            RETURN DISTINCT x.name AS X""", {"n": y})
+                  (p:Person)-[:PARENT_OF]->(y:Person)
+            WHERE toLower(y.name)=$n AND x <> y
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
     return _run("""
-        MATCH (p:Person)-[:PARENT_OF]->(x:Person {name:$xn}),
-              (p:Person)-[:PARENT_OF]->(y:Person {name:$yn})
-        WHERE x <> y
-        RETURN DISTINCT x.name AS X""", {"xn": x, "yn": y})
+        MATCH (p:Person)-[:PARENT_OF]->(x:Person),
+              (p:Person)-[:PARENT_OF]->(y:Person)
+        WHERE toLower(x.name)=$xn AND toLower(y.name)=$yn AND x <> y
+        RETURN DISTINCT x.name AS X""", {"xn": x.lower(), "yn": y.lower()})
 
 
 def _q_brother(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (p:Person)-[:PARENT_OF]->(x:Person {gender:'male'}),
-                  (p:Person)-[:PARENT_OF]->(y:Person {name:$n})
-            WHERE x <> y
-            RETURN DISTINCT x.name AS X""", {"n": y})
+            MATCH (p:Person)-[:PARENT_OF]->(x:Person),
+                  (p:Person)-[:PARENT_OF]->(y:Person)
+            WHERE toLower(y.name)=$n AND x <> y AND x.gender='male'
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
     return _run("""
-        MATCH (p:Person)-[:PARENT_OF]->(x:Person {name:$xn, gender:'male'}),
-              (p:Person)-[:PARENT_OF]->(y:Person {name:$yn})
-        RETURN DISTINCT x.name AS X""", {"xn": x, "yn": y})
+        MATCH (p:Person)-[:PARENT_OF]->(x:Person),
+              (p:Person)-[:PARENT_OF]->(y:Person)
+        WHERE toLower(x.name)=$xn AND toLower(y.name)=$yn
+          AND x <> y AND x.gender='male'
+        RETURN DISTINCT x.name AS X""", {"xn": x.lower(), "yn": y.lower()})
 
 
 def _q_sister(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (p:Person)-[:PARENT_OF]->(x:Person {gender:'female'}),
-                  (p:Person)-[:PARENT_OF]->(y:Person {name:$n})
-            WHERE x <> y
-            RETURN DISTINCT x.name AS X""", {"n": y})
+            MATCH (p:Person)-[:PARENT_OF]->(x:Person),
+                  (p:Person)-[:PARENT_OF]->(y:Person)
+            WHERE toLower(y.name)=$n AND x <> y AND x.gender='female'
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
     return _run("""
-        MATCH (p:Person)-[:PARENT_OF]->(x:Person {name:$xn, gender:'female'}),
-              (p:Person)-[:PARENT_OF]->(y:Person {name:$yn})
-        RETURN DISTINCT x.name AS X""", {"xn": x, "yn": y})
+        MATCH (p:Person)-[:PARENT_OF]->(x:Person),
+              (p:Person)-[:PARENT_OF]->(y:Person)
+        WHERE toLower(x.name)=$xn AND toLower(y.name)=$yn
+          AND x <> y AND x.gender='female'
+        RETURN DISTINCT x.name AS X""", {"xn": x.lower(), "yn": y.lower()})
 
 
 # ── Grandparents ──────────────────────────────────────────────────────────────
@@ -304,66 +354,78 @@ def _q_grandparent(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (x:Person)-[:PARENT_OF]->(:Person)-[:PARENT_OF]->(y:Person {name:$n})
-            RETURN DISTINCT x.name AS X""", {"n": y})
+            MATCH (x:Person)-[:PARENT_OF]->(:Person)-[:PARENT_OF]->(y:Person)
+            WHERE toLower(y.name)=$n
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
     return _run("""
-        MATCH (x:Person {name:$xn})-[:PARENT_OF]->(:Person)-[:PARENT_OF]->(y:Person {name:$yn})
-        RETURN DISTINCT x.name AS X""", {"xn": x, "yn": y})
+        MATCH (x:Person)-[:PARENT_OF]->(:Person)-[:PARENT_OF]->(y:Person)
+        WHERE toLower(x.name)=$xn AND toLower(y.name)=$yn
+        RETURN DISTINCT x.name AS X""", {"xn": x.lower(), "yn": y.lower()})
 
 
 def _q_grandfather(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (x:Person {gender:'male'})-[:PARENT_OF]->(:Person)-[:PARENT_OF]->(y:Person {name:$n})
-            RETURN DISTINCT x.name AS X""", {"n": y})
+            MATCH (x:Person)-[:PARENT_OF]->(:Person)-[:PARENT_OF]->(y:Person)
+            WHERE toLower(y.name)=$n AND x.gender='male'
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
     return _run("""
-        MATCH (x:Person {name:$xn, gender:'male'})-[:PARENT_OF]->(:Person)-[:PARENT_OF]->(y:Person {name:$yn})
-        RETURN DISTINCT x.name AS X""", {"xn": x, "yn": y})
+        MATCH (x:Person)-[:PARENT_OF]->(:Person)-[:PARENT_OF]->(y:Person)
+        WHERE toLower(x.name)=$xn AND toLower(y.name)=$yn AND x.gender='male'
+        RETURN DISTINCT x.name AS X""", {"xn": x.lower(), "yn": y.lower()})
 
 
 def _q_grandmother(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (x:Person {gender:'female'})-[:PARENT_OF]->(:Person)-[:PARENT_OF]->(y:Person {name:$n})
-            RETURN DISTINCT x.name AS X""", {"n": y})
+            MATCH (x:Person)-[:PARENT_OF]->(:Person)-[:PARENT_OF]->(y:Person)
+            WHERE toLower(y.name)=$n AND x.gender='female'
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
     return _run("""
-        MATCH (x:Person {name:$xn, gender:'female'})-[:PARENT_OF]->(:Person)-[:PARENT_OF]->(y:Person {name:$yn})
-        RETURN DISTINCT x.name AS X""", {"xn": x, "yn": y})
+        MATCH (x:Person)-[:PARENT_OF]->(:Person)-[:PARENT_OF]->(y:Person)
+        WHERE toLower(x.name)=$xn AND toLower(y.name)=$yn AND x.gender='female'
+        RETURN DISTINCT x.name AS X""", {"xn": x.lower(), "yn": y.lower()})
 
 
 def _q_grandchild(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (y:Person {name:$n})-[:PARENT_OF]->(:Person)-[:PARENT_OF]->(x:Person)
-            RETURN DISTINCT x.name AS X""", {"n": y})
+            MATCH (y:Person)-[:PARENT_OF]->(:Person)-[:PARENT_OF]->(x:Person)
+            WHERE toLower(y.name)=$n
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
     return _run("""
-        MATCH (y:Person {name:$yn})-[:PARENT_OF]->(:Person)-[:PARENT_OF]->(x:Person {name:$xn})
-        RETURN DISTINCT x.name AS X""", {"xn": x, "yn": y})
+        MATCH (y:Person)-[:PARENT_OF]->(:Person)-[:PARENT_OF]->(x:Person)
+        WHERE toLower(y.name)=$yn AND toLower(x.name)=$xn
+        RETURN DISTINCT x.name AS X""", {"xn": x.lower(), "yn": y.lower()})
 
 
 def _q_grandson(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (y:Person {name:$n})-[:PARENT_OF]->(:Person)-[:PARENT_OF]->(x:Person {gender:'male'})
-            RETURN DISTINCT x.name AS X""", {"n": y})
+            MATCH (y:Person)-[:PARENT_OF]->(:Person)-[:PARENT_OF]->(x:Person)
+            WHERE toLower(y.name)=$n AND x.gender='male'
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
     return _run("""
-        MATCH (y:Person {name:$yn})-[:PARENT_OF]->(:Person)-[:PARENT_OF]->(x:Person {name:$xn,gender:'male'})
-        RETURN DISTINCT x.name AS X""", {"xn": x, "yn": y})
+        MATCH (y:Person)-[:PARENT_OF]->(:Person)-[:PARENT_OF]->(x:Person)
+        WHERE toLower(y.name)=$yn AND toLower(x.name)=$xn AND x.gender='male'
+        RETURN DISTINCT x.name AS X""", {"xn": x.lower(), "yn": y.lower()})
 
 
 def _q_granddaughter(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (y:Person {name:$n})-[:PARENT_OF]->(:Person)-[:PARENT_OF]->(x:Person {gender:'female'})
-            RETURN DISTINCT x.name AS X""", {"n": y})
+            MATCH (y:Person)-[:PARENT_OF]->(:Person)-[:PARENT_OF]->(x:Person)
+            WHERE toLower(y.name)=$n AND x.gender='female'
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
     return _run("""
-        MATCH (y:Person {name:$yn})-[:PARENT_OF]->(:Person)-[:PARENT_OF]->(x:Person {name:$xn,gender:'female'})
-        RETURN DISTINCT x.name AS X""", {"xn": x, "yn": y})
+        MATCH (y:Person)-[:PARENT_OF]->(:Person)-[:PARENT_OF]->(x:Person)
+        WHERE toLower(y.name)=$yn AND toLower(x.name)=$xn AND x.gender='female'
+        RETURN DISTINCT x.name AS X""", {"xn": x.lower(), "yn": y.lower()})
 
 
 # ── Dada / Dadi / Nana / Nani ─────────────────────────────────────────────────
@@ -372,52 +434,44 @@ def _q_dada(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (x:Person {gender:'male'})-[:PARENT_OF]->(f:Person {gender:'male'})
-                  -[:PARENT_OF]->(y:Person {name:$n})
-            RETURN DISTINCT x.name AS X""", {"n": y})
+            MATCH (x:Person)-[:PARENT_OF]->(f:Person)-[:PARENT_OF]->(y:Person)
+            WHERE toLower(y.name)=$n AND x.gender='male' AND f.gender='male'
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
     return _run("""
-        MATCH (x:Person {name:$xn,gender:'male'})-[:PARENT_OF]->(f:Person {gender:'male'})
-              -[:PARENT_OF]->(y:Person {name:$yn})
-        RETURN DISTINCT x.name AS X""", {"xn": x, "yn": y})
+        MATCH (x:Person)-[:PARENT_OF]->(f:Person)-[:PARENT_OF]->(y:Person)
+        WHERE toLower(x.name)=$xn AND toLower(y.name)=$yn
+          AND x.gender='male' AND f.gender='male'
+        RETURN DISTINCT x.name AS X""", {"xn": x.lower(), "yn": y.lower()})
 
 
 def _q_dadi(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (x:Person {gender:'female'})-[:PARENT_OF]->(f:Person {gender:'male'})
-                  -[:PARENT_OF]->(y:Person {name:$n})
-            RETURN DISTINCT x.name AS X""", {"n": y})
-    return _run("""
-        MATCH (x:Person {name:$xn,gender:'female'})-[:PARENT_OF]->(f:Person {gender:'male'})
-              -[:PARENT_OF]->(y:Person {name:$yn})
-        RETURN DISTINCT x.name AS X""", {"xn": x, "yn": y})
+            MATCH (x:Person)-[:PARENT_OF]->(f:Person)-[:PARENT_OF]->(y:Person)
+            WHERE toLower(y.name)=$n AND x.gender='female' AND f.gender='male'
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
+    return []
 
 
 def _q_nana(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (x:Person {gender:'male'})-[:PARENT_OF]->(m:Person {gender:'female'})
-                  -[:PARENT_OF]->(y:Person {name:$n})
-            RETURN DISTINCT x.name AS X""", {"n": y})
-    return _run("""
-        MATCH (x:Person {name:$xn,gender:'male'})-[:PARENT_OF]->(m:Person {gender:'female'})
-              -[:PARENT_OF]->(y:Person {name:$yn})
-        RETURN DISTINCT x.name AS X""", {"xn": x, "yn": y})
+            MATCH (x:Person)-[:PARENT_OF]->(m:Person)-[:PARENT_OF]->(y:Person)
+            WHERE toLower(y.name)=$n AND x.gender='male' AND m.gender='female'
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
+    return []
 
 
 def _q_nani(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (x:Person {gender:'female'})-[:PARENT_OF]->(m:Person {gender:'female'})
-                  -[:PARENT_OF]->(y:Person {name:$n})
-            RETURN DISTINCT x.name AS X""", {"n": y})
-    return _run("""
-        MATCH (x:Person {name:$xn,gender:'female'})-[:PARENT_OF]->(m:Person {gender:'female'})
-              -[:PARENT_OF]->(y:Person {name:$yn})
-        RETURN DISTINCT x.name AS X""", {"xn": x, "yn": y})
+            MATCH (x:Person)-[:PARENT_OF]->(m:Person)-[:PARENT_OF]->(y:Person)
+            WHERE toLower(y.name)=$n AND x.gender='female' AND m.gender='female'
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
+    return []
 
 
 # ── Extended Family ───────────────────────────────────────────────────────────
@@ -426,75 +480,55 @@ def _q_uncle(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (gp:Person)-[:PARENT_OF]->(p:Person)-[:PARENT_OF]->(y:Person {name:$n}),
-                  (gp:Person)-[:PARENT_OF]->(x:Person {gender:'male'})
-            WHERE x <> p
-            RETURN DISTINCT x.name AS X""", {"n": y})
-    return _run("""
-        MATCH (gp:Person)-[:PARENT_OF]->(p:Person)-[:PARENT_OF]->(y:Person {name:$yn}),
-              (gp:Person)-[:PARENT_OF]->(x:Person {name:$xn,gender:'male'})
-        WHERE x <> p
-        RETURN DISTINCT x.name AS X""", {"xn": x, "yn": y})
+            MATCH (gp:Person)-[:PARENT_OF]->(p:Person)-[:PARENT_OF]->(y:Person),
+                  (gp:Person)-[:PARENT_OF]->(x:Person)
+            WHERE toLower(y.name)=$n AND x <> p AND x.gender='male'
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
+    return []
 
 
 def _q_aunt(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (gp:Person)-[:PARENT_OF]->(p:Person)-[:PARENT_OF]->(y:Person {name:$n}),
-                  (gp:Person)-[:PARENT_OF]->(x:Person {gender:'female'})
-            WHERE x <> p
-            RETURN DISTINCT x.name AS X""", {"n": y})
-    return _run("""
-        MATCH (gp:Person)-[:PARENT_OF]->(p:Person)-[:PARENT_OF]->(y:Person {name:$yn}),
-              (gp:Person)-[:PARENT_OF]->(x:Person {name:$xn,gender:'female'})
-        WHERE x <> p
-        RETURN DISTINCT x.name AS X""", {"xn": x, "yn": y})
+            MATCH (gp:Person)-[:PARENT_OF]->(p:Person)-[:PARENT_OF]->(y:Person),
+                  (gp:Person)-[:PARENT_OF]->(x:Person)
+            WHERE toLower(y.name)=$n AND x <> p AND x.gender='female'
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
+    return []
 
 
 def _q_cousin(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (ggp:Person)-[:PARENT_OF]->(pa:Person)-[:PARENT_OF]->(y:Person {name:$n}),
+            MATCH (ggp:Person)-[:PARENT_OF]->(pa:Person)-[:PARENT_OF]->(y:Person),
                   (ggp:Person)-[:PARENT_OF]->(ua:Person)-[:PARENT_OF]->(x:Person)
-            WHERE pa <> ua AND x <> y
-            RETURN DISTINCT x.name AS X""", {"n": y})
-    return _run("""
-        MATCH (ggp:Person)-[:PARENT_OF]->(pa:Person)-[:PARENT_OF]->(y:Person {name:$yn}),
-              (ggp:Person)-[:PARENT_OF]->(ua:Person)-[:PARENT_OF]->(x:Person {name:$xn})
-        WHERE pa <> ua
-        RETURN DISTINCT x.name AS X""", {"xn": x, "yn": y})
+            WHERE toLower(y.name)=$n AND pa <> ua AND x <> y
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
+    return []
 
 
 def _q_nephew(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (gp:Person)-[:PARENT_OF]->(z:Person)-[:PARENT_OF]->(x:Person {gender:'male'}),
-                  (gp:Person)-[:PARENT_OF]->(y:Person {name:$n})
-            WHERE z <> y
-            RETURN DISTINCT x.name AS X""", {"n": y})
-    return _run("""
-        MATCH (gp:Person)-[:PARENT_OF]->(z:Person)-[:PARENT_OF]->(x:Person {name:$xn,gender:'male'}),
-              (gp:Person)-[:PARENT_OF]->(y:Person {name:$yn})
-        WHERE z <> y
-        RETURN DISTINCT x.name AS X""", {"xn": x, "yn": y})
+            MATCH (gp:Person)-[:PARENT_OF]->(z:Person)-[:PARENT_OF]->(x:Person),
+                  (gp:Person)-[:PARENT_OF]->(y:Person)
+            WHERE toLower(y.name)=$n AND z <> y AND x.gender='male'
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
+    return []
 
 
 def _q_niece(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (gp:Person)-[:PARENT_OF]->(z:Person)-[:PARENT_OF]->(x:Person {gender:'female'}),
-                  (gp:Person)-[:PARENT_OF]->(y:Person {name:$n})
-            WHERE z <> y
-            RETURN DISTINCT x.name AS X""", {"n": y})
-    return _run("""
-        MATCH (gp:Person)-[:PARENT_OF]->(z:Person)-[:PARENT_OF]->(x:Person {name:$xn,gender:'female'}),
-              (gp:Person)-[:PARENT_OF]->(y:Person {name:$yn})
-        WHERE z <> y
-        RETURN DISTINCT x.name AS X""", {"xn": x, "yn": y})
+            MATCH (gp:Person)-[:PARENT_OF]->(z:Person)-[:PARENT_OF]->(x:Person),
+                  (gp:Person)-[:PARENT_OF]->(y:Person)
+            WHERE toLower(y.name)=$n AND z <> y AND x.gender='female'
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
+    return []
 
 
 # ── Urdu Relations ────────────────────────────────────────────────────────────
@@ -503,71 +537,55 @@ def _q_chacha(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (gp:Person)-[:PARENT_OF]->(f:Person {gender:'male'})-[:PARENT_OF]->(y:Person {name:$n}),
-                  (gp:Person)-[:PARENT_OF]->(x:Person {gender:'male'})
-            WHERE x <> f
-            RETURN DISTINCT x.name AS X""", {"n": y})
-    return _run("""
-        MATCH (gp:Person)-[:PARENT_OF]->(f:Person {gender:'male'})-[:PARENT_OF]->(y:Person {name:$yn}),
-              (gp:Person)-[:PARENT_OF]->(x:Person {name:$xn,gender:'male'})
-        WHERE x <> f
-        RETURN DISTINCT x.name AS X""", {"xn": x, "yn": y})
+            MATCH (gp:Person)-[:PARENT_OF]->(f:Person)-[:PARENT_OF]->(y:Person),
+                  (gp:Person)-[:PARENT_OF]->(x:Person)
+            WHERE toLower(y.name)=$n AND x <> f AND x.gender='male' AND f.gender='male'
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
+    return []
 
 
 def _q_phoophi(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (gp:Person)-[:PARENT_OF]->(f:Person {gender:'male'})-[:PARENT_OF]->(y:Person {name:$n}),
-                  (gp:Person)-[:PARENT_OF]->(x:Person {gender:'female'})
-            WHERE x <> f
-            RETURN DISTINCT x.name AS X""", {"n": y})
-    return _run("""
-        MATCH (gp:Person)-[:PARENT_OF]->(f:Person {gender:'male'})-[:PARENT_OF]->(y:Person {name:$yn}),
-              (gp:Person)-[:PARENT_OF]->(x:Person {name:$xn,gender:'female'})
-        WHERE x <> f
-        RETURN DISTINCT x.name AS X""", {"xn": x, "yn": y})
+            MATCH (gp:Person)-[:PARENT_OF]->(f:Person)-[:PARENT_OF]->(y:Person),
+                  (gp:Person)-[:PARENT_OF]->(x:Person)
+            WHERE toLower(y.name)=$n AND x <> f AND x.gender='female' AND f.gender='male'
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
+    return []
 
 
 def _q_maamu(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (gp:Person)-[:PARENT_OF]->(m:Person {gender:'female'})-[:PARENT_OF]->(y:Person {name:$n}),
-                  (gp:Person)-[:PARENT_OF]->(x:Person {gender:'male'})
-            WHERE x <> m
-            RETURN DISTINCT x.name AS X""", {"n": y})
-    return _run("""
-        MATCH (gp:Person)-[:PARENT_OF]->(m:Person {gender:'female'})-[:PARENT_OF]->(y:Person {name:$yn}),
-              (gp:Person)-[:PARENT_OF]->(x:Person {name:$xn,gender:'male'})
-        WHERE x <> m
-        RETURN DISTINCT x.name AS X""", {"xn": x, "yn": y})
+            MATCH (gp:Person)-[:PARENT_OF]->(m:Person)-[:PARENT_OF]->(y:Person),
+                  (gp:Person)-[:PARENT_OF]->(x:Person)
+            WHERE toLower(y.name)=$n AND x <> m AND x.gender='male' AND m.gender='female'
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
+    return []
 
 
 def _q_khala(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (gp:Person)-[:PARENT_OF]->(m:Person {gender:'female'})-[:PARENT_OF]->(y:Person {name:$n}),
-                  (gp:Person)-[:PARENT_OF]->(x:Person {gender:'female'})
-            WHERE x <> m
-            RETURN DISTINCT x.name AS X""", {"n": y})
-    return _run("""
-        MATCH (gp:Person)-[:PARENT_OF]->(m:Person {gender:'female'})-[:PARENT_OF]->(y:Person {name:$yn}),
-              (gp:Person)-[:PARENT_OF]->(x:Person {name:$xn,gender:'female'})
-        WHERE x <> m
-        RETURN DISTINCT x.name AS X""", {"xn": x, "yn": y})
+            MATCH (gp:Person)-[:PARENT_OF]->(m:Person)-[:PARENT_OF]->(y:Person),
+                  (gp:Person)-[:PARENT_OF]->(x:Person)
+            WHERE toLower(y.name)=$n AND x <> m AND x.gender='female' AND m.gender='female'
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
+    return []
 
 
 def _q_chachi(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (gp:Person)-[:PARENT_OF]->(f:Person {gender:'male'})-[:PARENT_OF]->(y:Person {name:$n}),
-                  (gp:Person)-[:PARENT_OF]->(ch:Person {gender:'male'}),
-                  (x:Person {gender:'female'})-[:MARRIED_TO]-(ch)
-            WHERE ch <> f
-            RETURN DISTINCT x.name AS X""", {"n": y})
+            MATCH (gp:Person)-[:PARENT_OF]->(f:Person)-[:PARENT_OF]->(y:Person),
+                  (gp:Person)-[:PARENT_OF]->(ch:Person),
+                  (x:Person)-[:MARRIED_TO]-(ch)
+            WHERE toLower(y.name)=$n AND ch <> f AND ch.gender='male'
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
     return []
 
 
@@ -575,11 +593,11 @@ def _q_phuppa(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (gp:Person)-[:PARENT_OF]->(f:Person {gender:'male'})-[:PARENT_OF]->(y:Person {name:$n}),
-                  (gp:Person)-[:PARENT_OF]->(ph:Person {gender:'female'}),
-                  (x:Person {gender:'male'})-[:MARRIED_TO]-(ph)
-            WHERE ph <> f
-            RETURN DISTINCT x.name AS X""", {"n": y})
+            MATCH (gp:Person)-[:PARENT_OF]->(f:Person)-[:PARENT_OF]->(y:Person),
+                  (gp:Person)-[:PARENT_OF]->(ph:Person),
+                  (x:Person)-[:MARRIED_TO]-(ph)
+            WHERE toLower(y.name)=$n AND ph <> f AND ph.gender='female'
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
     return []
 
 
@@ -587,11 +605,11 @@ def _q_maami(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (gp:Person)-[:PARENT_OF]->(m:Person {gender:'female'})-[:PARENT_OF]->(y:Person {name:$n}),
-                  (gp:Person)-[:PARENT_OF]->(ma:Person {gender:'male'}),
-                  (x:Person {gender:'female'})-[:MARRIED_TO]-(ma)
-            WHERE ma <> m
-            RETURN DISTINCT x.name AS X""", {"n": y})
+            MATCH (gp:Person)-[:PARENT_OF]->(m:Person)-[:PARENT_OF]->(y:Person),
+                  (gp:Person)-[:PARENT_OF]->(ma:Person),
+                  (x:Person)-[:MARRIED_TO]-(ma)
+            WHERE toLower(y.name)=$n AND ma <> m AND ma.gender='male'
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
     return []
 
 
@@ -599,11 +617,11 @@ def _q_khalu(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (gp:Person)-[:PARENT_OF]->(m:Person {gender:'female'})-[:PARENT_OF]->(y:Person {name:$n}),
-                  (gp:Person)-[:PARENT_OF]->(kh:Person {gender:'female'}),
-                  (x:Person {gender:'male'})-[:MARRIED_TO]-(kh)
-            WHERE kh <> m
-            RETURN DISTINCT x.name AS X""", {"n": y})
+            MATCH (gp:Person)-[:PARENT_OF]->(m:Person)-[:PARENT_OF]->(y:Person),
+                  (gp:Person)-[:PARENT_OF]->(kh:Person),
+                  (x:Person)-[:MARRIED_TO]-(kh)
+            WHERE toLower(y.name)=$n AND kh <> m AND kh.gender='female'
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
     return []
 
 
@@ -613,32 +631,30 @@ def _q_father_in_law(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (x:Person {gender:'male'})-[:PARENT_OF]->(s:Person)-[:MARRIED_TO]-(y:Person {name:$n})
-            RETURN DISTINCT x.name AS X""", {"n": y})
-    return _run("""
-        MATCH (x:Person {name:$xn,gender:'male'})-[:PARENT_OF]->(s:Person)-[:MARRIED_TO]-(y:Person {name:$yn})
-        RETURN DISTINCT x.name AS X""", {"xn": x, "yn": y})
+            MATCH (x:Person)-[:PARENT_OF]->(s:Person)-[:MARRIED_TO]-(y:Person)
+            WHERE toLower(y.name)=$n AND x.gender='male'
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
+    return []
 
 
 def _q_mother_in_law(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (x:Person {gender:'female'})-[:PARENT_OF]->(s:Person)-[:MARRIED_TO]-(y:Person {name:$n})
-            RETURN DISTINCT x.name AS X""", {"n": y})
-    return _run("""
-        MATCH (x:Person {name:$xn,gender:'female'})-[:PARENT_OF]->(s:Person)-[:MARRIED_TO]-(y:Person {name:$yn})
-        RETURN DISTINCT x.name AS X""", {"xn": x, "yn": y})
+            MATCH (x:Person)-[:PARENT_OF]->(s:Person)-[:MARRIED_TO]-(y:Person)
+            WHERE toLower(y.name)=$n AND x.gender='female'
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
+    return []
 
 
 def _q_brother_in_law(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (gp:Person)-[:PARENT_OF]->(s:Person)-[:MARRIED_TO]-(y:Person {name:$n}),
-                  (gp:Person)-[:PARENT_OF]->(x:Person {gender:'male'})
-            WHERE x <> s
-            RETURN DISTINCT x.name AS X""", {"n": y})
+            MATCH (gp:Person)-[:PARENT_OF]->(s:Person)-[:MARRIED_TO]-(y:Person),
+                  (gp:Person)-[:PARENT_OF]->(x:Person)
+            WHERE toLower(y.name)=$n AND x <> s AND x.gender='male'
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
     return []
 
 
@@ -646,10 +662,10 @@ def _q_sister_in_law(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (gp:Person)-[:PARENT_OF]->(s:Person)-[:MARRIED_TO]-(y:Person {name:$n}),
-                  (gp:Person)-[:PARENT_OF]->(x:Person {gender:'female'})
-            WHERE x <> s
-            RETURN DISTINCT x.name AS X""", {"n": y})
+            MATCH (gp:Person)-[:PARENT_OF]->(s:Person)-[:MARRIED_TO]-(y:Person),
+                  (gp:Person)-[:PARENT_OF]->(x:Person)
+            WHERE toLower(y.name)=$n AND x <> s AND x.gender='female'
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
     return []
 
 
@@ -657,9 +673,9 @@ def _q_son_in_law(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (y:Person {name:$n})-[:PARENT_OF]->(d:Person {gender:'female'}),
-                  (x:Person {gender:'male'})-[:MARRIED_TO]-(d)
-            RETURN DISTINCT x.name AS X""", {"n": y})
+            MATCH (y:Person)-[:PARENT_OF]->(d:Person)-[:MARRIED_TO]-(x:Person)
+            WHERE toLower(y.name)=$n AND x.gender='male'
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
     return []
 
 
@@ -667,76 +683,57 @@ def _q_daughter_in_law(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (y:Person {name:$n})-[:PARENT_OF]->(s:Person {gender:'male'}),
-                  (x:Person {gender:'female'})-[:MARRIED_TO]-(s)
-            RETURN DISTINCT x.name AS X""", {"n": y})
+            MATCH (y:Person)-[:PARENT_OF]->(s:Person)-[:MARRIED_TO]-(x:Person)
+            WHERE toLower(y.name)=$n AND x.gender='female'
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
     return []
 
 
-# ── Ancestor / Descendant — FIXED ─────────────────────────────────────────────
+# ── Ancestor / Descendant ─────────────────────────────────────────────────────
 
 def _q_ancestor(args):
-    """
-    FIX: Also include INFERRED_ANCESTOR edges in ancestor queries so that
-    results from hybrid reasoning are visible to the chatbot.
-    ancestor(X, ali) → who are ancestors of ali
-    ancestor(ali, X) → who is ali an ancestor of (descendants)
-    """
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
-        # "who are the ancestors of Y?" — walk up the tree
-        rows = _run("""
-            MATCH (x:Person)-[:PARENT_OF*1..]->(y:Person {name:$n})
-            RETURN DISTINCT x.name AS X""", {"n": y})
-        if not rows:
-            # also check inferred
-            rows = _run("""
-                MATCH (x:Person)-[:INFERRED_ANCESTOR]->(y:Person {name:$n})
-                RETURN DISTINCT x.name AS X""", {"n": y})
-        return rows
+        return _run("""
+            MATCH (x:Person)-[:PARENT_OF*1..]->(y:Person)
+            WHERE toLower(y.name)=$n
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
     if not _is_var(x) and _is_var(y):
-        # "who is X an ancestor of?" — walk down the tree
-        rows = _run("""
-            MATCH (x:Person {name:$n})-[:PARENT_OF*1..]->(y:Person)
-            RETURN DISTINCT y.name AS X""", {"n": x})
-        if not rows:
-            rows = _run("""
-                MATCH (x:Person {name:$n})-[:INFERRED_ANCESTOR]->(y:Person)
-                RETURN DISTINCT y.name AS X""", {"n": x})
-        return rows
-    # both bound — yes/no check
-    rows = _run("""
-        MATCH (x:Person {name:$xn})-[:PARENT_OF*1..]->(y:Person {name:$yn})
-        RETURN DISTINCT x.name AS X""", {"xn": x, "yn": y})
-    if not rows:
-        rows = _run("""
-            MATCH (x:Person {name:$xn})-[:INFERRED_ANCESTOR]->(y:Person {name:$yn})
-            RETURN DISTINCT x.name AS X""", {"xn": x, "yn": y})
-    return rows
+        return _run("""
+            MATCH (x:Person)-[:PARENT_OF*1..]->(y:Person)
+            WHERE toLower(x.name)=$n
+            RETURN DISTINCT y.name AS X""", {"n": x.lower()})
+    return _run("""
+        MATCH (x:Person)-[:PARENT_OF*1..]->(y:Person)
+        WHERE toLower(x.name)=$xn AND toLower(y.name)=$yn
+        RETURN DISTINCT x.name AS X""", {"xn": x.lower(), "yn": y.lower()})
 
 
 def _q_descendant(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (y:Person {name:$n})-[:PARENT_OF*1..]->(x:Person)
-            RETURN DISTINCT x.name AS X""", {"n": y})
+            MATCH (y:Person)-[:PARENT_OF*1..]->(x:Person)
+            WHERE toLower(y.name)=$n
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
     return _run("""
-        MATCH (y:Person {name:$yn})-[:PARENT_OF*1..]->(x:Person {name:$xn})
-        RETURN DISTINCT x.name AS X""", {"xn": x, "yn": y})
+        MATCH (y:Person)-[:PARENT_OF*1..]->(x:Person)
+        WHERE toLower(y.name)=$yn AND toLower(x.name)=$xn
+        RETURN DISTINCT x.name AS X""", {"xn": x.lower(), "yn": y.lower()})
 
 
 def _q_blood_relative(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (x:Person)-[:PARENT_OF*1..]-(y:Person {name:$n})
-            WHERE x <> y
-            RETURN DISTINCT x.name AS X""", {"n": y})
+            MATCH (x:Person)-[:PARENT_OF*1..]-(y:Person)
+            WHERE toLower(y.name)=$n AND x <> y
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
     if not _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (x:Person {name:$xn})-[:PARENT_OF*1..]-(y:Person {name:$yn})
-            RETURN DISTINCT x.name AS X""", {"xn": x, "yn": y})
+            MATCH (x:Person)-[:PARENT_OF*1..]-(y:Person)
+            WHERE toLower(x.name)=$xn AND toLower(y.name)=$yn
+            RETURN DISTINCT x.name AS X""", {"xn": x.lower(), "yn": y.lower()})
     return []
 
 
@@ -744,13 +741,14 @@ def _q_family_member(args):
     x, y = args[0], args[1]
     if _is_var(x) and not _is_var(y):
         return _run("""
-            MATCH (y:Person {name:$n})-[:PARENT_OF]-(x:Person)
+            MATCH (y:Person)-[:PARENT_OF]-(x:Person)
+            WHERE toLower(y.name)=$n
             RETURN DISTINCT x.name AS X
             UNION
-            MATCH (p:Person)-[:PARENT_OF]->(y:Person {name:$n}),
+            MATCH (p:Person)-[:PARENT_OF]->(y:Person),
                   (p:Person)-[:PARENT_OF]->(x:Person)
-            WHERE x <> y
-            RETURN DISTINCT x.name AS X""", {"n": y})
+            WHERE toLower(y.name)=$n AND x <> y
+            RETURN DISTINCT x.name AS X""", {"n": y.lower()})
     return []
 
 
@@ -760,8 +758,8 @@ def _q_dob(args):
     x, y = args[0], args[1]
     if not _is_var(x) and _is_var(y):
         return _run(
-            "MATCH (p:Person {name:$n}) WHERE p.dob IS NOT NULL RETURN p.dob AS X",
-            {"n": x})
+            "MATCH (p:Person) WHERE toLower(p.name)=$n AND p.dob IS NOT NULL RETURN p.dob AS X",
+            {"n": x.lower()})
     if _is_var(x) and not _is_var(y):
         return _run("MATCH (p:Person {dob:$d}) RETURN p.name AS X", {"d": y})
     return []
@@ -771,13 +769,12 @@ def _q_occupation(args):
     x, y = args[0], args[1]
     if not _is_var(x) and _is_var(y):
         return _run(
-            "MATCH (p:Person {name:$n}) WHERE p.occupation IS NOT NULL RETURN p.occupation AS X",
-            {"n": x})
+            "MATCH (p:Person) WHERE toLower(p.name)=$n AND p.occupation IS NOT NULL RETURN p.occupation AS X",
+            {"n": x.lower()})
     if _is_var(x) and not _is_var(y):
-        return _run("MATCH (p:Person {occupation:$occ}) RETURN p.name AS X", {"occ": y})
+        return _run("MATCH (p:Person) WHERE p.occupation=$occ RETURN p.name AS X", {"occ": y})
     if _is_var(x) and _is_var(y):
-        return _run(
-            "MATCH (p:Person) WHERE p.occupation IS NOT NULL RETURN p.name AS X, p.occupation AS Y")
+        return _run("MATCH (p:Person) WHERE p.occupation IS NOT NULL RETURN p.name AS X, p.occupation AS Y")
     return []
 
 
@@ -785,29 +782,29 @@ def _q_lives_in(args):
     x, y = args[0], args[1]
     if not _is_var(x) and _is_var(y):
         return _run(
-            "MATCH (p:Person {name:$n}) WHERE p.city IS NOT NULL RETURN p.city AS X",
-            {"n": x})
+            "MATCH (p:Person) WHERE toLower(p.name)=$n AND p.city IS NOT NULL RETURN p.city AS X",
+            {"n": x.lower()})
     if _is_var(x) and not _is_var(y):
-        return _run("MATCH (p:Person {city:$city}) RETURN p.name AS X", {"city": y})
-    if _is_var(x) and _is_var(y):
         return _run(
-            "MATCH (p:Person) WHERE p.city IS NOT NULL RETURN p.name AS X, p.city AS Y")
+            "MATCH (p:Person) WHERE toLower(p.city)=toLower($city) RETURN p.name AS X",
+            {"city": y})
+    if _is_var(x) and _is_var(y):
+        return _run("MATCH (p:Person) WHERE p.city IS NOT NULL RETURN p.name AS X, p.city AS Y")
     return _run(
-        "MATCH (p:Person {name:$xn, city:$yn}) RETURN p.name AS X",
-        {"xn": x, "yn": y})
+        "MATCH (p:Person) WHERE toLower(p.name)=$xn AND toLower(p.city)=toLower($yn) RETURN p.name AS X",
+        {"xn": x.lower(), "yn": y.lower()})
 
 
 def _q_religion(args):
     x, y = args[0], args[1]
     if not _is_var(x) and _is_var(y):
         return _run(
-            "MATCH (p:Person {name:$n}) WHERE p.religion IS NOT NULL RETURN p.religion AS X",
-            {"n": x})
+            "MATCH (p:Person) WHERE toLower(p.name)=$n AND p.religion IS NOT NULL RETURN p.religion AS X",
+            {"n": x.lower()})
     if _is_var(x) and not _is_var(y):
-        return _run("MATCH (p:Person {religion:$r}) RETURN p.name AS X", {"r": y})
+        return _run("MATCH (p:Person) WHERE p.religion=$r RETURN p.name AS X", {"r": y})
     if _is_var(x) and _is_var(y):
-        return _run(
-            "MATCH (p:Person) WHERE p.religion IS NOT NULL RETURN p.name AS X, p.religion AS Y")
+        return _run("MATCH (p:Person) WHERE p.religion IS NOT NULL RETURN p.name AS X, p.religion AS Y")
     return []
 
 
@@ -818,9 +815,10 @@ def _q_same_city(args):
     name = x if not _is_var(x) else y if not _is_var(y) else None
     if name:
         return _run("""
-            MATCH (a:Person {name:$n}), (b:Person)
-            WHERE a.city = b.city AND a <> b AND a.city IS NOT NULL
-            RETURN DISTINCT b.name AS X""", {"n": name})
+            MATCH (a:Person), (b:Person)
+            WHERE toLower(a.name)=$n AND a.city IS NOT NULL
+              AND toLower(a.city)=toLower(b.city) AND a <> b
+            RETURN DISTINCT b.name AS X""", {"n": name.lower()})
     return []
 
 
@@ -829,9 +827,10 @@ def _q_same_occupation(args):
     name = x if not _is_var(x) else y if not _is_var(y) else None
     if name:
         return _run("""
-            MATCH (a:Person {name:$n}), (b:Person)
-            WHERE a.occupation = b.occupation AND a <> b AND a.occupation IS NOT NULL
-            RETURN DISTINCT b.name AS X""", {"n": name})
+            MATCH (a:Person), (b:Person)
+            WHERE toLower(a.name)=$n AND a.occupation IS NOT NULL
+              AND a.occupation=b.occupation AND a <> b
+            RETURN DISTINCT b.name AS X""", {"n": name.lower()})
     return []
 
 
@@ -840,15 +839,15 @@ def _q_same_generation(args):
     name = x if not _is_var(x) else y if not _is_var(y) else None
     if name:
         return _run("""
-            MATCH (p:Person)-[:PARENT_OF]->(a:Person {name:$n}),
+            MATCH (p:Person)-[:PARENT_OF]->(a:Person),
                   (p:Person)-[:PARENT_OF]->(b:Person)
-            WHERE a <> b
+            WHERE toLower(a.name)=$n AND a <> b
             RETURN DISTINCT b.name AS X
             UNION
-            MATCH (gp:Person)-[:PARENT_OF]->()-[:PARENT_OF]->(a:Person {name:$n}),
+            MATCH (gp:Person)-[:PARENT_OF]->()-[:PARENT_OF]->(a:Person),
                   (gp:Person)-[:PARENT_OF]->()-[:PARENT_OF]->(b:Person)
-            WHERE a <> b
-            RETURN DISTINCT b.name AS X""", {"n": name})
+            WHERE toLower(a.name)=$n AND a <> b
+            RETURN DISTINCT b.name AS X""", {"n": name.lower()})
     return []
 
 

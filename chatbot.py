@@ -511,14 +511,16 @@ def _answer_city_list(text):
     else:
         m = re.search(r"\b(\w+)\s+(?:members|people|family)\b", text)
         if m:
-            candidate = normalize_atom(m.group(1))
-            if candidate in KNOWN_CITIES:
-                city = candidate
-    if not city or city not in KNOWN_CITIES:
+            city = normalize_atom(m.group(1))
+    if not city:
         return None
+    # Query Neo4j directly — no static city list check needed
     results = _dedupe(query("lives_in", ["X", city]))
     if results:
-        return f"Family members in {capitalize_name(city)}: {', '.join(format_value(n) for n in results)}."
+        return (
+            f"Family members in {capitalize_name(city)}: "
+            f"{', '.join(format_value(n) for n in results)}."
+        )
     return f"No family members found in {capitalize_name(city)}."
 
 
@@ -628,10 +630,6 @@ def _answer_relationship(relation, person):
 
 
 def _all_about(person):
-    """
-    FIX: Now shows Father and Mother correctly, plus Children, Ancestors,
-    Descendants. Uses correct Cypher arg directions for each relation.
-    """
     if not is_known_person(person):
         return (
             f"Sorry, I have no information about {capitalize_name(person)}. "
@@ -642,25 +640,51 @@ def _all_about(person):
     def add(label, relation, args):
         results = _dedupe(query(relation, args))
         if results:
-            lines.append(f"- {label}: {', '.join(format_value(i) for i in results)}")
+            lines.append(
+                f"- {label}: {', '.join(format_value(i) for i in results)}"
+            )
 
-    # FIX: father(X, person) means X is the father OF person → args = ["X", person]
+    # Core relationships
     add("Father",        "father",      ["X", person])
     add("Mother",        "mother",      ["X", person])
-    add("Spouse",        "spouse",      [person, "X"])   # FIX: spouse(person, X)
-    add("Children",      "child",       ["X", person])   # child(X, person) = X is child of person
+    add("Spouse",        "spouse",      ["X", person])
+    add("Children",      "child",       ["X", person])
     add("Siblings",      "sibling",     ["X", person])
     add("Grandparents",  "grandparent", ["X", person])
-    add("Uncles",        "uncle",       ["X", person])
-    add("Aunts",         "aunt",        ["X", person])
-    add("Ancestors",     "ancestor",    ["X", person])
+
+    # ALSO show all parents via PARENT_OF directly —
+    # catches cases where gender is not set on parent nodes
+    # (they were auto-created as stubs by graph_builder.py)
+    raw_parents = _dedupe(query("parent", ["X", person]))
+    already_shown = set()
+    for line in lines:
+        for part in line.split(": ", 1)[-1].split(", "):
+            already_shown.add(part.strip().lower())
+
+    new_parents = [
+        p for p in raw_parents
+        if p.lower() not in already_shown
+    ]
+    if new_parents:
+        lines.append(
+            f"- Parents: {', '.join(format_value(p) for p in new_parents)}"
+        )
+
+    # Properties
     add("Date of birth", "dob",         [person, "X"])
     add("Occupation",    "occupation",  [person, "X"])
     add("City",          "lives_in",    [person, "X"])
     add("Religion",      "religion",    [person, "X"])
 
+    # Ancestors (from hybrid reasoning INFERRED_ANCESTOR edges)
+    ancestors = _dedupe(query("ancestor", ["X", person]))
+    if ancestors:
+        lines.append(
+            f"- Ancestors: {', '.join(format_value(a) for a in ancestors)}"
+        )
+
     if len(lines) == 1:
-        return f"Sorry, I have no detailed information about {capitalize_name(person)}."
+        return f"Sorry, I have no information about {capitalize_name(person)}."
     return "\n".join(lines)
 
 
